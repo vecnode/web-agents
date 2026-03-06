@@ -108,3 +108,4 @@ pub async fn test_ollama() -> Result<String> {
     println!();
     Ok(response_parts.join(""))
 }
+

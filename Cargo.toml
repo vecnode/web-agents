@@ -1,6 +1,6 @@
 [package]
-name = "egui_chat"
-description = "A multi-agent visualiser using egui"
+name = "web-agents"
+description = "A multi-agent visualiser application in Rust"
 version = "0.1.0"
 edition = "2024"
 

@@ -1,6 +1,6 @@
 # web-agents
 
-A multi-agent visualiser using egui
+A multi-agent visualiser application in Rust
 
 ```sh
 cargo run

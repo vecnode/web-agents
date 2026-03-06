@@ -1478,22 +1478,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "egui_chat"
-version = "0.1.0"
-dependencies = [
- "adk-agent",
- "adk-core",
- "adk-model",
- "adk-runner",
- "adk-session",
- "anyhow",
- "eframe",
- "egui",
- "futures-util",
- "tokio",
-]
-
-[[package]]
 name = "egui_glow"
 version = "0.28.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5920,6 +5904,22 @@ dependencies = [
  "log",
  "once_cell",
  "pkg-config",
+]
+
+[[package]]
+name = "web-agents"
+version = "0.1.0"
+dependencies = [
+ "adk-agent",
+ "adk-core",
+ "adk-model",
+ "adk-runner",
+ "adk-session",
+ "anyhow",
+ "eframe",
+ "egui",
+ "futures-util",
+ "tokio",
 ]
 
 [[package]]
