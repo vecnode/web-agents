@@ -1,0 +1,17 @@
+[package]
+name = "egui_chat"
+description = "A multi-agent visualiser using egui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = "0.28"
+egui = "0.28"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+adk-agent = "0.3.2"
+adk-model = { version = "0.3.2", features = ["ollama"] }
+adk-runner = "0.3.2"
+adk-session = "0.3.2"
+adk-core = "0.3.2"
+anyhow = "1.0"
+futures-util = "0.3"
