@@ -1,5 +1,7 @@
 mod app;
 mod adk_integration;
+mod http_client;
+mod conversation_loop;
 
 use app::MyApp;
 use std::sync::Arc;

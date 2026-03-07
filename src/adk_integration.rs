@@ -13,6 +13,15 @@ pub async fn send_to_ollama(
     limit_token: bool,
     num_predict: &str,
 ) -> Result<String> {
+    send_to_ollama_with_context(instruction, input, limit_token, num_predict).await
+}
+
+pub async fn send_to_ollama_with_context(
+    instruction: &str,
+    input: &str,
+    limit_token: bool,
+    num_predict: &str,
+) -> Result<String> {
     // Create Ollama model configuration
     let model_name = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "glm-4.7-flash:latest".to_string());
     let mut config = OllamaConfig::new(&model_name);
@@ -61,14 +70,29 @@ pub async fn send_to_ollama(
     // Create content with input text
     let user_content = Content::new("user").with_text(input);
     
-    // Extract and print the input prompt
+    // Extract and print the input prompt (truncated for conversation context)
     let input_text = user_content.parts.iter()
         .find_map(|p| match p {
             adk_core::Part::Text { text } => Some(text.as_str()),
             _ => None,
         })
         .unwrap_or("");
-    println!("Input: {}", input_text);
+    
+    // Print truncated input for conversation context (safe UTF-8 truncation)
+    if !input_text.is_empty() {
+        // Truncate to approximately 200 bytes, but ensure we don't split UTF-8 characters
+        let max_bytes = 200;
+        if input_text.len() > max_bytes {
+            // Find the last valid character boundary before max_bytes
+            let mut truncate_at = max_bytes;
+            while !input_text.is_char_boundary(truncate_at) && truncate_at > 0 {
+                truncate_at -= 1;
+            }
+            println!("Context: {}...", &input_text[..truncate_at]);
+        } else {
+            println!("Context: {}", input_text);
+        }
+    }
     
     // Send prompt to Ollama
     let mut stream = runner
@@ -77,7 +101,6 @@ pub async fn send_to_ollama(
     
     // Collect the stream events and print tokens as they come
     let mut response_parts = Vec::new();
-    print!("Response: ");
     
     while let Some(event_result) = stream.next().await {
         match event_result {
@@ -102,7 +125,7 @@ pub async fn send_to_ollama(
                 // Check if this is the final event (turn_complete = true)
                 if event.llm_response.turn_complete {
                     if let Some(usage) = &event.llm_response.usage_metadata {
-                        println!("\n\n[Tokens: prompt={}, candidates={}, total={}]", 
+                        println!("\n[Tokens: prompt={}, candidates={}, total={}]", 
                             usage.prompt_token_count, 
                             usage.candidates_token_count, 
                             usage.total_token_count);
