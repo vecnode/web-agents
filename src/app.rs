@@ -135,6 +135,63 @@ impl eframe::App for MyApp {
                     .map(|a| (a.id, a.name.clone(), a.instruction.clone()))
                     .collect();
                 
+                // Agent Manager row - always at the top
+                let manager_bg_color = egui::Color32::from_rgb(40, 40, 40);
+                let manager_frame = egui::Frame::default()
+                    .fill(manager_bg_color)
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 150, 255))) // Blue border for manager
+                    .rounding(4.0)
+                    .inner_margin(egui::Margin::same(5.0))
+                    .outer_margin(egui::Margin::same(0.0));
+                
+                manager_frame.show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing = egui::Vec2::new(5.0, 2.0);
+                        
+                        // Agent Manager label
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Agent Manager").strong().size(14.0));
+                        });
+                        
+                        // Sub-rows for each agent with buttons
+                        for (agent_id, agent_name) in &agent_names {
+                            ui.horizontal(|ui| {
+                                // Status and Erase Agent buttons on the left
+                                if ui.button("Status").clicked() {
+                                    if let Some(agent) = self.agents.iter().find(|a| a.id == *agent_id) {
+                                        println!("=== Agent {} Status ===", agent.id);
+                                        println!("Name: {}", agent.name);
+                                        println!("Instruction: {}", agent.instruction);
+                                        println!("Limit Token: {}", agent.limit_token);
+                                        if agent.limit_token {
+                                            println!("num_predict: {}", agent.num_predict);
+                                        }
+                                        println!("Selected: {}", agent.selected);
+                                        println!("In Conversation: {}", agent.in_conversation);
+                                        if agent.in_conversation {
+                                            println!("Topic: {}", agent.conversation_topic);
+                                            if let Some(pid) = agent.conversation_partner_id {
+                                                println!("Partner: Agent {}", pid);
+                                            }
+                                        }
+                                        println!("======================");
+                                    }
+                                }
+                                
+                                if ui.button("Erase Agent").clicked() {
+                                    agents_to_remove.push(*agent_id);
+                                }
+                                
+                                // Agent name label
+                                ui.label(agent_name);
+                            });
+                        }
+                    });
+                });
+                
+                // Add spacing between manager and agent rows
+                ui.add_space(6.0);
+                
                 // Display agents in rows
                 for agent in &mut self.agents {
                     let agent_id = agent.id;
@@ -155,9 +212,9 @@ impl eframe::App for MyApp {
                     
                     let _frame_response = frame.show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            // Left section (60% width) - existing widgets
+                            // Left section (50% width) - existing widgets
                             ui.vertical(|ui| {
-                                ui.set_width(ui.available_width() * 0.6);
+                                ui.set_width(ui.available_width() * 0.5);
                                 ui.spacing_mut().item_spacing = egui::Vec2::new(5.0, 2.0);
                                 
                                 // Agent Name row
@@ -236,39 +293,14 @@ impl eframe::App for MyApp {
                                     }
                                 });
                                 
-                                // Status and Erase Agent buttons row
-                                ui.horizontal(|ui| {
-                                    if ui.button("Status").clicked() {
-                                        println!("=== Agent {} Status ===", agent.id);
-                                        println!("Name: {}", agent.name);
-                                        println!("Instruction: {}", agent.instruction);
-                                        println!("Limit Token: {}", agent.limit_token);
-                                        if agent.limit_token {
-                                            println!("num_predict: {}", agent.num_predict);
-                                        }
-                                        println!("Selected: {}", agent.selected);
-                                        println!("In Conversation: {}", agent.in_conversation);
-                                        if agent.in_conversation {
-                                            println!("Topic: {}", agent.conversation_topic);
-                                            if let Some(pid) = agent.conversation_partner_id {
-                                                println!("Partner: Agent {}", pid);
-                                            }
-                                        }
-                                        println!("======================");
-                                    }
-                                    
-                                    if ui.button("Erase Agent").clicked() {
-                                        agents_to_remove.push(agent_id);
-                                    }
-                                });
                             });
                             
                             // Vertical separator
                             ui.separator();
                             
-                            // Right section (40% width) - conversation controls
+                            // Right section (50% width) - conversation controls
                             ui.vertical(|ui| {
-                                ui.set_width(ui.available_width() * 0.4);
+                                ui.set_width(ui.available_width() * 0.5);
                                 ui.spacing_mut().item_spacing = egui::Vec2::new(5.0, 5.0);
                                 
                                 // Start/Stop Conversation button

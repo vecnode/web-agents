@@ -73,10 +73,28 @@ pub async fn start_conversation_loop(
     let mut history = ConversationHistory::new(5); // Keep last 5 messages
     
     // Print conversation header
-    println!("\n════════════════════════════════════════════════════════");
-    println!("Conversation Started: {} ↔ {}", agent_a_name, agent_b_name);
-    println!("Topic: {}", topic);
-    println!("════════════════════════════════════════════════════════\n");
+    let start_message = format!(
+        "Conversation Started: {} ↔ {}\nTopic: {}",
+        agent_a_name, agent_b_name, topic
+    );
+    println!("\n{}", start_message);
+    
+    // Send to chat app
+    let endpoint_clone = endpoint.clone();
+    let topic_clone = topic.clone();
+    tokio::spawn(async move {
+        if let Err(e) = crate::http_client::send_conversation_message(
+            &endpoint_clone,
+            0, // System message ID
+            "Agent Manager",
+            0,
+            "System",
+            &topic_clone,
+            &start_message,
+        ).await {
+            eprintln!("[HTTP] Failed to send conversation start message: {}", e);
+        }
+    });
     
     loop {
         // Check if conversation is still active
@@ -109,9 +127,29 @@ pub async fn start_conversation_loop(
         let conversation_context = history.format_history(&sender_name, &receiver_name, &topic);
         
         // Print turn header
-        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        println!("Turn {}: {} → {}", turn + 1, sender_name, receiver_name);
-        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        let turn_message = format!(
+            "Turn {}: {} -> {}",
+            turn + 1, sender_name, receiver_name
+        );
+        println!("{}", turn_message);
+        
+        // Send turn message to chat app
+        let endpoint_clone = endpoint.clone();
+        let topic_clone = topic.clone();
+        let turn_message_clone = turn_message.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::http_client::send_conversation_message(
+                &endpoint_clone,
+                0, // System message ID
+                "Agent Manager",
+                0,
+                "System",
+                &topic_clone,
+                &turn_message_clone,
+            ).await {
+                eprintln!("[HTTP] Failed to send turn message: {}", e);
+            }
+        });
         
         // Send message to Ollama
         match crate::adk_integration::send_to_ollama_with_context(
@@ -166,8 +204,26 @@ pub async fn start_conversation_loop(
         }
     }
     
-    println!("\n════════════════════════════════════════════════════════");
-    println!("Conversation Ended: {} ↔ {}", agent_a_name, agent_b_name);
-    println!("Total turns: {}", turn);
-    println!("════════════════════════════════════════════════════════\n");
+    let end_message = format!(
+        "Conversation Ended: {} ↔ {}\nTotal turns: {}",
+        agent_a_name, agent_b_name, turn
+    );
+    println!("\n{}", end_message);
+    
+    // Send to chat app
+    let endpoint_clone = endpoint.clone();
+    let topic_clone = topic.clone();
+    tokio::spawn(async move {
+        if let Err(e) = crate::http_client::send_conversation_message(
+            &endpoint_clone,
+            0, // System message ID
+            "Agent Manager",
+            0,
+            "System",
+            &topic_clone,
+            &end_message,
+        ).await {
+            eprintln!("[HTTP] Failed to send conversation end message: {}", e);
+        }
+    });
 }
