@@ -46,29 +46,30 @@ impl eframe::App for MyApp {
             ui.vertical(|ui| {
                 // Top row with HTTP Endpoint and buttons - green border
                 let available_width = ui.available_width() - 12.0;
+                let settings_bg_color = egui::Color32::from_rgb(40, 40, 40);
+
                 egui::Frame::default()
+                    .fill(settings_bg_color)
                     .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0)))
                     .inner_margin(egui::Margin { left: 6.0, right: 6.0, top: 6.0, bottom: 6.0 })
                     .rounding(4.0)
                     .show(ui, |ui| {
                         ui.set_width(available_width);
                         ui.vertical(|ui| {
+
+                            ui.label(egui::RichText::new("Settings").strong().size(14.0));
+                            ui.separator();
+                            
                             // HTTP Endpoint configuration
                             ui.horizontal(|ui| {
-                                ui.label("HTTP Endpoint:");
+                                ui.label("Chat HTTP Endpoint:");
                                 ui.add(egui::TextEdit::singleline(&mut self.http_endpoint)
-                                    .desired_width(300.0));
+                                    .desired_width(200.0));
                             });
                             ui.add_space(5.0);
                             
                             ui.horizontal(|ui| {
-                                ui.add_space(20.0);
-                                
-                                if ui.button("Hello").clicked() {
-                                    println!("Hello");
-                                }
-                                
-                                ui.add_space(10.0);
+                                //ui.add_space(20.0);
                                 
                                 if ui.button("Test Ollama").clicked() {
                                     println!("Testing Ollama integration");
@@ -89,7 +90,7 @@ impl eframe::App for MyApp {
 
                                 ui.separator();
 
-                                if ui.button("Create Agent").clicked() {
+                                if ui.button("Create Agent Worker").clicked() {
                                     // Find the lowest available ID
                                     let used_ids: std::collections::HashSet<usize> = 
                                         self.agents.iter().map(|a| a.id).collect();
@@ -117,6 +118,14 @@ impl eframe::App for MyApp {
                                     if new_id >= self.next_agent_id {
                                         self.next_agent_id = new_id + 1;
                                     }
+                                }
+
+                                ui.separator();
+
+                                if ui.button("Create Agent Evaluator").clicked() {
+                                    // Find the lowest available ID
+                                    println!("Creating Agent Manager");
+                                    
                                 }
                             });
                         });
@@ -151,6 +160,7 @@ impl eframe::App for MyApp {
                 let manager_bg_color = egui::Color32::from_rgb(40, 40, 40);
                 let manager_frame = egui::Frame::default()
                     .fill(manager_bg_color)
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 192, 203))) // Pink border
                     .rounding(4.0)
                     .inner_margin(egui::Margin::same(5.0))
                     .outer_margin(egui::Margin::same(0.0));
@@ -162,7 +172,10 @@ impl eframe::App for MyApp {
                         // Agent Manager label
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("Agent Manager").strong().size(14.0));
+                            
                         });
+
+                        ui.separator();
                         
                         // Sub-rows for each agent with buttons
                         for (agent_id, agent_name) in &agent_names {
@@ -189,7 +202,7 @@ impl eframe::App for MyApp {
                                     }
                                 }
                                 
-                                if ui.button("Erase Agent").clicked() {
+                                if ui.button("Erase").clicked() {
                                     agents_to_remove.push(*agent_id);
                                 }
                                 
@@ -222,98 +235,70 @@ impl eframe::App for MyApp {
                         .outer_margin(egui::Margin::same(0.0));
                     
                     let _frame_response = frame.show(ui, |ui| {
+                        // Agent Manager label
+                        ui.label(egui::RichText::new("Agent Worker").strong().size(14.0));
+                        ui.separator();
+
                         ui.horizontal(|ui| {
+                            
                             // Left section (50% width) - existing widgets
                             ui.vertical(|ui| {
                                 ui.set_width(ui.available_width() * 0.5);
                                 ui.spacing_mut().item_spacing = egui::Vec2::new(5.0, 2.0);
+
+                                
                                 
                                 // Agent Name row
                                 ui.horizontal(|ui| {
                                     ui.label("Agent Name:");
-                                    ui.add(egui::TextEdit::singleline(&mut agent.name)
-                                        .desired_width(100.0));
+                                    ui.add(egui::TextEdit::singleline(&mut agent.name));
+                                        //.desired_width(100.0));
                                 });
                                 
                                 // Instruction row (system prompt)
                                 ui.horizontal(|ui| {
                                     ui.label("Instruction:");
-                                    ui.add(egui::TextEdit::singleline(&mut agent.instruction)
-                                        .desired_width(200.0));
+                                    ui.add(egui::TextEdit::singleline(&mut agent.instruction));
+                                        //.desired_width(200.0));
                                 });
-                                
-                                // Input row with Send button
+
+                                // Topic input field
                                 ui.horizontal(|ui| {
-                                    ui.label("Input:");
-                                    ui.add(egui::TextEdit::singleline(&mut agent.input)
-                                        .desired_width(200.0));
+                                    ui.label("Topic:");
+                                    ui.add(egui::TextEdit::singleline(&mut agent.conversation_topic));
+                                        //.desired_width(200.0));
+                                });
+
+                                // Partner selection dropdown
+                                ui.horizontal(|ui| {
+                                    ui.label("With:");
+                                    let selected_text = if let Some(pid) = agent.conversation_partner_id {
+                                        format!("Agent {}", pid)
+                                    } else {
+                                        "None".to_string()
+                                    };
                                     
-                                    if ui.button("Send").clicked() {
-                                        let agent_clone = agent.clone();
-                                        let endpoint = self.http_endpoint.clone();
-                                        let ctx = ctx.clone();
-                                        let handle = self.rt_handle.clone();
-                                        handle.spawn(async move {
-                                            match crate::adk_integration::send_to_ollama(
-                                                &agent_clone.instruction,
-                                                &agent_clone.input,
-                                                agent_clone.limit_token,
-                                                &agent_clone.num_predict,
-                                            ).await {
-                                                Ok(response) => {
-                                                    // If agent is in conversation, send via HTTP
-                                                    if agent_clone.in_conversation && agent_clone.conversation_partner_id.is_some() {
-                                                        if let Some(partner_id) = agent_clone.conversation_partner_id {
-                                                            // Find partner name
-                                                            let partner_name = format!("Agent {}", partner_id);
-                                                            if let Err(e) = crate::http_client::send_conversation_message(
-                                                                &endpoint,
-                                                                agent_clone.id,
-                                                                &agent_clone.name,
-                                                                partner_id,
-                                                                &partner_name,
-                                                                &agent_clone.conversation_topic,
-                                                                &response,
-                                                            ).await {
-                                                                eprintln!("Failed to send HTTP message: {}", e);
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    eprintln!("Ollama error: {}", e);
+                                    egui::ComboBox::from_id_source(ui.id().with(agent_id).with("partner"))
+                                        .selected_text(selected_text)
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_value(&mut agent.conversation_partner_id, None, "None");
+                                            for (other_id, other_name) in &agent_names {
+                                                if *other_id != agent_id {
+                                                    ui.selectable_value(
+                                                        &mut agent.conversation_partner_id,
+                                                        Some(*other_id),
+                                                        other_name,
+                                                    );
                                                 }
                                             }
-                                            ctx.request_repaint();
                                         });
-                                    }
                                 });
                                 
-                                // Limit token checkbox and num_predict row
-                                ui.horizontal(|ui| {
-                                    if ui.checkbox(&mut agent.limit_token, "Limit Token").changed() {
-                                        if !agent.limit_token {
-                                            agent.num_predict.clear();
-                                        }
-                                    }
-                                    
-                                    if agent.limit_token {
-                                        ui.label("num_predict:");
-                                        ui.add(egui::TextEdit::singleline(&mut agent.num_predict)
-                                            .desired_width(80.0));
-                                    }
-                                });
-                                
-                            });
-                            
-                            // Vertical separator
-                            ui.separator();
-                            
-                            // Right section (50% width) - conversation controls
-                            ui.vertical(|ui| {
-                                ui.set_width(ui.available_width() * 0.5);
-                                ui.spacing_mut().item_spacing = egui::Vec2::new(5.0, 5.0);
-                                
+                                // Loop Chat checkbox
+                                ui.checkbox(&mut agent.loop_chat, "Loop Chat");
+
+
+
                                 // Start/Stop Conversation button
                                 let button_text = if agent.conversation_active {
                                     "Stop Conversation"
@@ -324,11 +309,13 @@ impl eframe::App for MyApp {
                                 let button = if agent.conversation_active {
                                     egui::Button::new(button_text)
                                         .fill(egui::Color32::from_rgb(200, 50, 50)) // Red when active
-                                        .min_size(egui::Vec2::new(ui.available_width(), 30.0))
+                                        .min_size(egui::Vec2::new(160.0, 20.0))//ui.available_width(), 30.0))
                                 } else {
                                     egui::Button::new(button_text)
-                                        .min_size(egui::Vec2::new(ui.available_width(), 30.0))
+                                        .min_size(egui::Vec2::new(160.0, 20.0))//ui.available_width(), 30.0))
                                 };
+
+                                ui.separator();
                                 
                                 if ui.add(button).clicked() {
                                     if agent.conversation_active {
@@ -397,40 +384,85 @@ impl eframe::App for MyApp {
                                     }
                                 }
                                 
-                                // Topic input field
-                                ui.horizontal(|ui| {
-                                    ui.label("Topic:");
-                                    ui.add(egui::TextEdit::singleline(&mut agent.conversation_topic)
-                                        .desired_width(200.0));
-                                });
+
                                 
-                                // Partner selection dropdown
+                                
+                                
+                            });
+                            
+                            // Vertical separator
+                            ui.separator();
+                            
+                            // Right section (50% width) - conversation controls
+                            ui.vertical(|ui| {
+                                ui.set_width(ui.available_width());
+                                ui.spacing_mut().item_spacing = egui::Vec2::new(5.0, 5.0);
+                                
+                                
+                                
+                                
+                                
+                                // Input row with Send button
                                 ui.horizontal(|ui| {
-                                    ui.label("With:");
-                                    let selected_text = if let Some(pid) = agent.conversation_partner_id {
-                                        format!("Agent {}", pid)
-                                    } else {
-                                        "None".to_string()
-                                    };
+                                    ui.label("Input:");
+                                    ui.add(egui::TextEdit::singleline(&mut agent.input)
+                                        .desired_width(200.0));
                                     
-                                    egui::ComboBox::from_id_source(ui.id().with(agent_id).with("partner"))
-                                        .selected_text(selected_text)
-                                        .show_ui(ui, |ui| {
-                                            ui.selectable_value(&mut agent.conversation_partner_id, None, "None");
-                                            for (other_id, other_name) in &agent_names {
-                                                if *other_id != agent_id {
-                                                    ui.selectable_value(
-                                                        &mut agent.conversation_partner_id,
-                                                        Some(*other_id),
-                                                        other_name,
-                                                    );
+                                    if ui.button("Send").clicked() {
+                                        let agent_clone = agent.clone();
+                                        let endpoint = self.http_endpoint.clone();
+                                        let ctx = ctx.clone();
+                                        let handle = self.rt_handle.clone();
+                                        handle.spawn(async move {
+                                            match crate::adk_integration::send_to_ollama(
+                                                &agent_clone.instruction,
+                                                &agent_clone.input,
+                                                agent_clone.limit_token,
+                                                &agent_clone.num_predict,
+                                            ).await {
+                                                Ok(response) => {
+                                                    // If agent is in conversation, send via HTTP
+                                                    if agent_clone.in_conversation && agent_clone.conversation_partner_id.is_some() {
+                                                        if let Some(partner_id) = agent_clone.conversation_partner_id {
+                                                            // Find partner name
+                                                            let partner_name = format!("Agent {}", partner_id);
+                                                            if let Err(e) = crate::http_client::send_conversation_message(
+                                                                &endpoint,
+                                                                agent_clone.id,
+                                                                &agent_clone.name,
+                                                                partner_id,
+                                                                &partner_name,
+                                                                &agent_clone.conversation_topic,
+                                                                &response,
+                                                            ).await {
+                                                                eprintln!("Failed to send HTTP message: {}", e);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    eprintln!("Ollama error: {}", e);
                                                 }
                                             }
+                                            ctx.request_repaint();
                                         });
+                                    }
                                 });
                                 
-                                // Loop Chat checkbox
-                                ui.checkbox(&mut agent.loop_chat, "Loop Chat");
+                                // Limit token checkbox and num_predict row
+                                ui.horizontal(|ui| {
+                                    if ui.checkbox(&mut agent.limit_token, "Limit Token").changed() {
+                                        if !agent.limit_token {
+                                            agent.num_predict.clear();
+                                        }
+                                    }
+                                    
+                                    if agent.limit_token {
+                                        ui.label("num_predict:");
+                                        ui.add(egui::TextEdit::singleline(&mut agent.num_predict)
+                                            .desired_width(80.0));
+                                    }
+                                });
                                 
                                 // Show conversation status
                                 if agent.conversation_active {
