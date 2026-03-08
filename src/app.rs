@@ -44,72 +44,83 @@ impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical(|ui| {
-                // HTTP Endpoint configuration
-                ui.horizontal(|ui| {
-                    ui.label("HTTP Endpoint:");
-                    ui.add(egui::TextEdit::singleline(&mut self.http_endpoint)
-                        .desired_width(300.0));
-                });
-                ui.add_space(5.0);
-                
-                ui.horizontal(|ui| {
-                    ui.add_space(20.0);
-                    
-                    if ui.button("Hello").clicked() {
-                        println!("Hello");
-                    }
-                    
-                    ui.add_space(10.0);
-                    
-                    if ui.button("Test Ollama").clicked() {
-                        println!("Testing Ollama integration");
-                        let ctx = ctx.clone();
-                        let handle = self.rt_handle.clone();
-                        handle.spawn(async move {
-                            match crate::adk_integration::test_ollama().await {
-                                Ok(_response) => {
-                                    // Response is already printed during streaming in test_ollama()
+                // Top row with HTTP Endpoint and buttons - green border
+                let available_width = ui.available_width() - 12.0;
+                egui::Frame::default()
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0)))
+                    .inner_margin(egui::Margin { left: 6.0, right: 6.0, top: 6.0, bottom: 6.0 })
+                    .rounding(4.0)
+                    .show(ui, |ui| {
+                        ui.set_width(available_width);
+                        ui.vertical(|ui| {
+                            // HTTP Endpoint configuration
+                            ui.horizontal(|ui| {
+                                ui.label("HTTP Endpoint:");
+                                ui.add(egui::TextEdit::singleline(&mut self.http_endpoint)
+                                    .desired_width(300.0));
+                            });
+                            ui.add_space(5.0);
+                            
+                            ui.horizontal(|ui| {
+                                ui.add_space(20.0);
+                                
+                                if ui.button("Hello").clicked() {
+                                    println!("Hello");
                                 }
-                                Err(e) => {
-                                    eprintln!("Ollama error: {}", e);
+                                
+                                ui.add_space(10.0);
+                                
+                                if ui.button("Test Ollama").clicked() {
+                                    println!("Testing Ollama integration");
+                                    let ctx = ctx.clone();
+                                    let handle = self.rt_handle.clone();
+                                    handle.spawn(async move {
+                                        match crate::adk_integration::test_ollama().await {
+                                            Ok(_response) => {
+                                                // Response is already printed during streaming in test_ollama()
+                                            }
+                                            Err(e) => {
+                                                eprintln!("Ollama error: {}", e);
+                                            }
+                                        }
+                                        ctx.request_repaint();
+                                    });
                                 }
-                            }
-                            ctx.request_repaint();
-                        });
-                    }
 
-                    ui.separator();
+                                ui.separator();
 
-                    if ui.button("Create Agent").clicked() {
-                        // Find the lowest available ID
-                        let used_ids: std::collections::HashSet<usize> = 
-                            self.agents.iter().map(|a| a.id).collect();
-                        let mut new_id = 1;
-                        while used_ids.contains(&new_id) {
-                            new_id += 1;
-                        }
-                        
-                        self.agents.push(Agent {
-                            id: new_id,
-                            name: format!("Agent {}", new_id),
-                            selected: false,
-                            instruction: "You are an assistant".to_string(),
-                            input: String::new(),
-                            limit_token: false,
-                            num_predict: String::new(),
-                            in_conversation: false,
-                            conversation_topic: String::new(),
-                            conversation_partner_id: None,
-                            loop_chat: false,
-                            conversation_active: false,
+                                if ui.button("Create Agent").clicked() {
+                                    // Find the lowest available ID
+                                    let used_ids: std::collections::HashSet<usize> = 
+                                        self.agents.iter().map(|a| a.id).collect();
+                                    let mut new_id = 1;
+                                    while used_ids.contains(&new_id) {
+                                        new_id += 1;
+                                    }
+                                    
+                                    self.agents.push(Agent {
+                                        id: new_id,
+                                        name: format!("Agent {}", new_id),
+                                        selected: false,
+                                        instruction: "You are an assistant".to_string(),
+                                        input: String::new(),
+                                        limit_token: false,
+                                        num_predict: String::new(),
+                                        in_conversation: false,
+                                        conversation_topic: String::new(),
+                                        conversation_partner_id: None,
+                                        loop_chat: false,
+                                        conversation_active: false,
+                                    });
+                                    
+                                    // Update next_agent_id to be at least one more than the highest used ID
+                                    if new_id >= self.next_agent_id {
+                                        self.next_agent_id = new_id + 1;
+                                    }
+                                }
+                            });
                         });
-                        
-                        // Update next_agent_id to be at least one more than the highest used ID
-                        if new_id >= self.next_agent_id {
-                            self.next_agent_id = new_id + 1;
-                        }
-                    }
-                });
+                    });
                 
                 ui.separator();
                 
@@ -118,6 +129,7 @@ impl eframe::App for MyApp {
                 egui::Frame::default()
                     .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0)))
                     .inner_margin(egui::Margin { left: 6.0, right: 6.0, top: 6.0, bottom: 6.0 })
+                    .rounding(4.0)
                     .show(ui, |ui| {
                         ui.set_width(available_width);
                         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -139,7 +151,6 @@ impl eframe::App for MyApp {
                 let manager_bg_color = egui::Color32::from_rgb(40, 40, 40);
                 let manager_frame = egui::Frame::default()
                     .fill(manager_bg_color)
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 150, 255))) // Blue border for manager
                     .rounding(4.0)
                     .inner_margin(egui::Margin::same(5.0))
                     .outer_margin(egui::Margin::same(0.0));
