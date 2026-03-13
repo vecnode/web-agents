@@ -19,7 +19,6 @@ struct Agent {
     conversation_topic: String,
     conversation_mode: String,
     conversation_partner_id: Option<usize>,
-    loop_chat: bool,
     conversation_active: bool,
 }
 
@@ -295,7 +294,6 @@ impl eframe::App for MyApp {
                                             conversation_topic: String::new(),
                                             conversation_mode: "Shared".to_string(),
                                             conversation_partner_id: None,
-                                            loop_chat: false,
                                             conversation_active: false,
                                         });
                                         if new_id >= self.next_agent_id {
@@ -496,12 +494,17 @@ impl eframe::App for MyApp {
                                                                     egui::ComboBox::from_id_source(ui.id().with(agent_id).with("conversation_mode"))
                                                                         .selected_text(agent.conversation_mode.clone())
                                                                         .show_ui(ui, |ui| {
-                                                                            ui.selectable_value(&mut agent.conversation_mode, "Shared".to_string(), "Shared");
-                                                                            ui.selectable_value(&mut agent.conversation_mode, "Unique".to_string(), "Unique");
+                                                                            if ui.selectable_label(agent.conversation_mode == "Shared", "Shared").clicked() {
+                                                                                agent.conversation_mode = "Shared".to_string();
+                                                                            }
+                                                                            if ui.selectable_label(agent.conversation_mode == "Unique", "Unique").clicked() {
+                                                                                agent.conversation_mode = "Unique".to_string();
+                                                                                agent.conversation_partner_id = None;
+                                                                            }
                                                                         });
                                                                 });
 
-                                                                if !targeted_partner_ids.contains(&agent_id) {
+                                                                if agent.conversation_mode == "Shared" && !targeted_partner_ids.contains(&agent_id) {
                                                                     ui.horizontal(|ui| {
                                                                         ui.label("With:");
                                                                         let selected_text = if let Some(pid) = agent.conversation_partner_id {
@@ -526,8 +529,6 @@ impl eframe::App for MyApp {
                                                                             });
                                                                     });
                                                                 }
-                                                                
-                                                                ui.checkbox(&mut agent.loop_chat, "Loop Chat");
                                                             }
 
                                                             let button_text = if agent.conversation_active {
@@ -559,9 +560,21 @@ impl eframe::App for MyApp {
                                                                         }
                                                                     });
                                                                 } else {
-                                                                    if let Some(partner_id) = agent.conversation_partner_id {
-                                                                        if !agent.conversation_topic.is_empty() {
-                                                                            if let Some((_, _, partner_name, partner_instruction)) = agents_info.iter().find(|(id, _, _, _)| *id == partner_id) {
+                                                                    if !agent.conversation_topic.is_empty() {
+                                                                        let maybe_partner = if agent.conversation_mode == "Unique" {
+                                                                            Some((agent.id, agent.name.clone(), agent.instruction.clone()))
+                                                                        } else if let Some(partner_id) = agent.conversation_partner_id {
+                                                                            agents_info
+                                                                                .iter()
+                                                                                .find(|(id, _, _, _)| *id == partner_id)
+                                                                                .map(|(_, _, partner_name, partner_instruction)| {
+                                                                                    (partner_id, partner_name.clone(), partner_instruction.clone())
+                                                                                })
+                                                                        } else {
+                                                                            None
+                                                                        };
+
+                                                                        if let Some((partner_id, partner_name, partner_instruction)) = maybe_partner {
                                                                                 agent.conversation_active = true;
                                                                                 agent.in_conversation = true;
                                                                                 let active_flag = Arc::new(Mutex::new(true));
@@ -572,8 +585,8 @@ impl eframe::App for MyApp {
                                                                                 let agent_a_name = agent.name.clone();
                                                                                 let agent_a_instruction = agent.instruction.clone();
                                                                                 let agent_b_id = partner_id;
-                                                                                let agent_b_name = partner_name.clone();
-                                                                                let agent_b_instruction = partner_instruction.clone();
+                                                                                let agent_b_name = partner_name;
+                                                                                let agent_b_instruction = partner_instruction;
                                                                                 let topic = agent.conversation_topic.clone();
                                                                                 let last_msg = self.last_message_in_chat.clone();
                                                                                 let selected_model = if self.selected_ollama_model.trim().is_empty() {
@@ -597,14 +610,11 @@ impl eframe::App for MyApp {
                                                                                     ).await;
                                                                                 });
                                                                                 self.conversation_loop_handles.push((agent_id, active_flag, loop_handle));
-                                                                            } else {
-                                                                                println!("Partner agent not found");
-                                                                            }
                                                                         } else {
-                                                                            println!("Cannot start conversation: need topic");
+                                                                            println!("Cannot start conversation: need partner");
                                                                         }
                                                                     } else {
-                                                                        println!("Cannot start conversation: need partner");
+                                                                        println!("Cannot start conversation: need topic");
                                                                     }
                                                                 }
                                                             }
