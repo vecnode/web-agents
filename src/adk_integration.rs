@@ -6,14 +6,44 @@ use adk_core::Content;
 use futures_util::StreamExt;
 use std::sync::Arc;
 use anyhow::Result;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct OllamaTagsResponse {
+    models: Vec<OllamaTagModel>,
+}
+
+#[derive(Deserialize)]
+struct OllamaTagModel {
+    name: String,
+}
+
+fn resolve_model_name(model_override: Option<&str>) -> String {
+    if let Some(model) = model_override {
+        if !model.trim().is_empty() {
+            return model.to_string();
+        }
+    }
+    std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "glm-4.7-flash:latest".to_string())
+}
+
+pub async fn fetch_ollama_models() -> Result<Vec<String>> {
+    let url = std::env::var("OLLAMA_TAGS_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:11434/api/tags".to_string());
+    let client = reqwest::Client::new();
+    let response = client.get(url).send().await?;
+    let tags = response.json::<OllamaTagsResponse>().await?;
+    Ok(tags.models.into_iter().map(|m| m.name).collect())
+}
 
 pub async fn send_to_ollama(
     instruction: &str,
     input: &str,
     limit_token: bool,
     num_predict: &str,
+    model_override: Option<&str>,
 ) -> Result<String> {
-    send_to_ollama_with_context(instruction, input, limit_token, num_predict).await
+    send_to_ollama_with_context(instruction, input, limit_token, num_predict, model_override).await
 }
 
 pub async fn send_to_ollama_with_context(
@@ -21,9 +51,10 @@ pub async fn send_to_ollama_with_context(
     input: &str,
     limit_token: bool,
     num_predict: &str,
+    model_override: Option<&str>,
 ) -> Result<String> {
     // Create Ollama model configuration
-    let model_name = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "glm-4.7-flash:latest".to_string());
+    let model_name = resolve_model_name(model_override);
     let mut config = OllamaConfig::new(&model_name);
     
     // Set num_ctx if limit_token is enabled
@@ -143,10 +174,10 @@ pub async fn send_to_ollama_with_context(
     Ok(response_parts.join(""))
 }
 
-pub async fn test_ollama() -> Result<String> {
+pub async fn test_ollama(model_override: Option<&str>) -> Result<String> {
     // Create Ollama model configuration
     // Assumes Ollama is running on localhost:11434
-    let model_name = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "glm-4.7-flash:latest".to_string());
+    let model_name = resolve_model_name(model_override);
     let config = OllamaConfig::new(&model_name);
     let model = OllamaModel::new(config)?;
 

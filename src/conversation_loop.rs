@@ -68,6 +68,7 @@ pub async fn start_conversation_loop(
     endpoint: String,
     active_flag: Arc<Mutex<bool>>,
     last_message_in_chat: Arc<Mutex<Option<String>>>,
+    selected_model: Option<String>,
 ) {
     let mut turn = 0;
     let mut is_agent_a_turn = true;
@@ -158,6 +159,7 @@ pub async fn start_conversation_loop(
             &conversation_context,
             false,
             "",
+            selected_model.as_deref(),
         ).await {
             Ok(response) => {
                 // Add to history
