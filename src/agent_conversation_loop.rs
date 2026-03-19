@@ -71,6 +71,7 @@ pub async fn start_conversation_loop(
     endpoint: String,
     active_flag: Arc<Mutex<bool>>,
     last_message_in_chat: Arc<Mutex<Option<String>>>,
+    message_events: Arc<Mutex<Vec<String>>>,
     selected_model: Option<String>,
     history_size: usize,
     turn_delay_secs: u64,
@@ -201,7 +202,11 @@ pub async fn start_conversation_loop(
             Ok(response) => {
                 // Add to history
                 history.add_message(sender_id, sender_name.clone(), response.clone(), turn);
-                *last_message_in_chat.lock().unwrap() = Some(response.clone());
+                // Include a monotonic turn marker so downstream nodes can react
+                // once per turn even if model text repeats exactly.
+                let event = format!("TURN:{}::MSG::{}", turn, response);
+                *last_message_in_chat.lock().unwrap() = Some(event.clone());
+                message_events.lock().unwrap().push(event);
                 // Print formatted message
                 println!("\n[{}]: {}", sender_name, response);
                 println!();

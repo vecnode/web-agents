@@ -22,8 +22,13 @@ pub struct AMSAgents {
     conversation_history_size: usize,
     http_endpoint: String,
     last_message_in_chat: Arc<Mutex<Option<String>>>,
+    conversation_message_events: Arc<Mutex<Vec<String>>>,
     last_evaluated_message_by_evaluator: Arc<Mutex<std::collections::HashMap<usize, String>>>,
     last_researched_message_by_researcher: Arc<Mutex<std::collections::HashMap<usize, String>>>,
+    evaluator_event_queues: Arc<Mutex<std::collections::HashMap<usize, std::collections::VecDeque<(String, String)>>>>,
+    researcher_event_queues: Arc<Mutex<std::collections::HashMap<usize, std::collections::VecDeque<(String, String)>>>>,
+    evaluator_inflight_nodes: Arc<Mutex<std::collections::HashSet<usize>>>,
+    researcher_inflight_nodes: Arc<Mutex<std::collections::HashSet<usize>>>,
     conversation_loop_handles: Vec<(usize, Arc<Mutex<bool>>, tokio::task::JoinHandle<()>)>, // (agent_id, active_flag, handle)
     nodes_panel: nodes_panel::NodesPanelState,
 }
@@ -44,8 +49,13 @@ impl AMSAgents {
             http_endpoint: std::env::var("CONVERSATION_HTTP_ENDPOINT")
                 .unwrap_or_else(|_| "http://localhost:3000/".to_string()),
             last_message_in_chat: Arc::new(Mutex::new(None)),
+            conversation_message_events: Arc::new(Mutex::new(Vec::new())),
             last_evaluated_message_by_evaluator: Arc::new(Mutex::new(std::collections::HashMap::new())),
             last_researched_message_by_researcher: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            evaluator_event_queues: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            researcher_event_queues: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            evaluator_inflight_nodes: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            researcher_inflight_nodes: Arc::new(Mutex::new(std::collections::HashSet::new())),
             conversation_loop_handles: Vec::new(),
             nodes_panel: nodes_panel::NodesPanelState::default(),
         }
