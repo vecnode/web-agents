@@ -1,6 +1,6 @@
-# ams-agents
+# arp 
 
-Agent dashboard application in Rust
+Agents Research Platform for HCI and Cognitive Sciences.
 
 ```sh
 # Development: Builds to 'target/debug/'
