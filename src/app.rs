@@ -2,6 +2,7 @@ use eframe::egui;
 use tokio::runtime::Handle;
 use std::sync::{Arc, Mutex};
 use crate::agent_entities::{Agent, AgentManager, Evaluator, Researcher};
+use crate::reproducibility::{RunContext, RunManifest};
 
 mod settings_panel;
 mod nodes_panel;
@@ -30,6 +31,13 @@ pub struct AMSAgents {
     evaluator_inflight_nodes: Arc<Mutex<std::collections::HashSet<usize>>>,
     researcher_inflight_nodes: Arc<Mutex<std::collections::HashSet<usize>>>,
     conversation_loop_handles: Vec<(usize, Arc<Mutex<bool>>, tokio::task::JoinHandle<()>)>, // (agent_id, active_flag, handle)
+    current_run_context: Option<RunContext>,
+    current_manifest: Option<RunManifest>,
+    manifest_export_path: String,
+    manifest_import_path: String,
+    manifest_status_message: String,
+    read_only_replay_mode: bool,
+    theme_applied: bool,
     nodes_panel: nodes_panel::NodesPanelState,
 }
 
@@ -57,6 +65,13 @@ impl AMSAgents {
             evaluator_inflight_nodes: Arc::new(Mutex::new(std::collections::HashSet::new())),
             researcher_inflight_nodes: Arc::new(Mutex::new(std::collections::HashSet::new())),
             conversation_loop_handles: Vec::new(),
+            current_run_context: None,
+            current_manifest: None,
+            manifest_export_path: "runs/exported-manifest.json".to_string(),
+            manifest_import_path: "runs/import-manifest.json".to_string(),
+            manifest_status_message: String::new(),
+            read_only_replay_mode: false,
+            theme_applied: false,
             nodes_panel: nodes_panel::NodesPanelState::default(),
         }
     }
@@ -64,6 +79,10 @@ impl AMSAgents {
 
 impl eframe::App for AMSAgents {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if !self.theme_applied {
+            catppuccin_egui::set_theme(ctx, catppuccin_egui::LATTE);
+            self.theme_applied = true;
+        }
         // Auto-refresh model list on startup
         if self.ollama_models.lock().unwrap().is_empty() && !*self.ollama_models_loading.lock().unwrap() {
             *self.ollama_models_loading.lock().unwrap() = true;
@@ -86,9 +105,6 @@ impl eframe::App for AMSAgents {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical(|ui| {
                 ui.set_min_height(ui.available_height());
-                self.render_settings_panel(ui, ctx);
-                
-                ui.separator();
                 self.render_nodes_panel(ui);
             });
         });

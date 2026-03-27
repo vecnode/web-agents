@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 use tokio::time::{sleep, Duration};
+use crate::reproducibility::RunContext;
 
 // Conversation history entry
 #[derive(Clone)]
@@ -75,6 +76,7 @@ pub async fn start_conversation_loop(
     selected_model: Option<String>,
     history_size: usize,
     turn_delay_secs: u64,
+    run_context: Option<RunContext>,
 ) {
     let mut turn = 0;
     let mut is_agent_a_turn = true;
@@ -99,6 +101,7 @@ pub async fn start_conversation_loop(
     // Send to chat app
     let endpoint_clone = endpoint.clone();
     let topic_clone = topics_summary.clone();
+    let run_context_for_start = run_context.clone();
     tokio::spawn(async move {
         if let Err(e) = crate::http_client::send_conversation_message(
             &endpoint_clone,
@@ -108,6 +111,7 @@ pub async fn start_conversation_loop(
             "System",
             &topic_clone,
             &start_message,
+            run_context_for_start.as_ref(),
         ).await {
             eprintln!("[HTTP] Failed to send conversation start message: {}", e);
         }
@@ -177,6 +181,7 @@ pub async fn start_conversation_loop(
         let endpoint_clone = endpoint.clone();
         let topic_clone = effective_topic.clone();
         let turn_message_clone = turn_message.clone();
+        let run_context_for_turn = run_context.clone();
         tokio::spawn(async move {
             if let Err(e) = crate::http_client::send_conversation_message(
                 &endpoint_clone,
@@ -186,6 +191,7 @@ pub async fn start_conversation_loop(
                 "System",
                 &topic_clone,
                 &turn_message_clone,
+                run_context_for_turn.as_ref(),
             ).await {
                 eprintln!("[HTTP] Failed to send turn message: {}", e);
             }
@@ -213,6 +219,7 @@ pub async fn start_conversation_loop(
                 // Send via HTTP (non-blocking, log errors but continue)
                 let endpoint_clone = endpoint.clone();
                 let topic_clone = effective_topic.clone();
+                let run_context_for_message = run_context.clone();
                 tokio::spawn(async move {
                     if let Err(e) = crate::http_client::send_conversation_message(
                         &endpoint_clone,
@@ -222,6 +229,7 @@ pub async fn start_conversation_loop(
                         &receiver_name,
                         &topic_clone,
                         &response,
+                        run_context_for_message.as_ref(),
                     ).await {
                         eprintln!("[HTTP] Failed to send message: {}", e);
                     }
@@ -258,6 +266,7 @@ pub async fn start_conversation_loop(
     // Send to chat app
     let endpoint_clone = endpoint.clone();
     let topic_clone = topics_summary;
+    let run_context_for_end = run_context;
     tokio::spawn(async move {
         if let Err(e) = crate::http_client::send_conversation_message(
             &endpoint_clone,
@@ -267,6 +276,7 @@ pub async fn start_conversation_loop(
             "System",
             &topic_clone,
             &end_message,
+            run_context_for_end.as_ref(),
         ).await {
             eprintln!("[HTTP] Failed to send conversation end message: {}", e);
         }

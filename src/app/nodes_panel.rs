@@ -1,9 +1,15 @@
 use super::AMSAgents;
+use crate::reproducibility::{
+    GraphSnapshot, ManifestEdge, ManifestNode, RunContext, RunManifest, RunRuntimeSettings, APP_NAME,
+    MANIFEST_VERSION, canonical_graph_signature, derive_experiment_id, export_manifest_to, new_run_id,
+    now_rfc3339_utc, read_manifest, runs_root, write_manifest,
+};
 use eframe::egui;
 use rand::Rng;
-use egui_snarl::ui::{BackgroundPattern, PinInfo, PinPlacement, SnarlStyle, SnarlViewer, SnarlWidget, WireStyle};
-use egui_snarl::{InPin, NodeId, OutPin, Snarl};
+use egui_snarl::ui::{PinInfo, SnarlViewer};
+use egui_snarl::{InPin, InPinId, NodeId, OutPin, OutPinId, Snarl};
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -21,6 +27,14 @@ enum NodeCategory {
     Agent,
     Tool,
     Output,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PanelTab {
+    Overview,
+    Agents,
+    Ollama,
+    Settings,
 }
 
 impl AgentNodeKind {
@@ -301,7 +315,8 @@ impl NodeData {
 
 pub(super) struct NodesPanelState {
     snarl: Snarl<NodeData>,
-    wire_style: WireStyle,
+    selected_add_kind: AgentNodeKind,
+    active_tab: PanelTab,
 }
 
 impl Default for NodesPanelState {
@@ -309,7 +324,8 @@ impl Default for NodesPanelState {
         let snarl = Snarl::new();
         Self {
             snarl,
-            wire_style: WireStyle::Bezier5,
+            selected_add_kind: AgentNodeKind::Worker,
+            active_tab: PanelTab::Overview,
         }
     }
 }
@@ -426,7 +442,6 @@ impl SnarlViewer<NodeData> for BasicNodeViewer {
                 let mut erase = false;
                 // Make manager node slightly wider than others.
                 ui.vertical(|ui| {
-                    ui.small(format!("Node {:?}", node));
                     ui.add_sized(
                         [120.0, 6.0],
                         egui::Separator::default().horizontal(),
@@ -493,7 +508,6 @@ impl SnarlViewer<NodeData> for BasicNodeViewer {
                     };
 
                     ui.vertical(|ui| {
-                        ui.small(format!("Node {:?}", node));
                         ui.separator();
                         AMSAgents::render_agent_worker_header(ui, &manager_name);
                         ui.separator();
@@ -693,7 +707,6 @@ impl SnarlViewer<NodeData> for BasicNodeViewer {
                     };
 
                     ui.vertical(|ui| {
-                        ui.small(format!("Node {:?}", node));
                         ui.separator();
                         ui.label(egui::RichText::new(&conv.name).strong().size(12.0));
                         ui.separator();
@@ -800,7 +813,6 @@ impl SnarlViewer<NodeData> for BasicNodeViewer {
                     };
 
                     ui.vertical(|ui| {
-                            ui.small(format!("Node {:?}", node));
                             ui.separator();
                             AMSAgents::render_agent_evaluator_header(
                                 ui,
@@ -969,7 +981,6 @@ impl SnarlViewer<NodeData> for BasicNodeViewer {
                     };
 
                     ui.vertical(|ui| {
-                            ui.small(format!("Node {:?}", node));
                             ui.separator();
                             AMSAgents::render_agent_researcher_header(
                                 ui,
@@ -1105,7 +1116,6 @@ impl SnarlViewer<NodeData> for BasicNodeViewer {
                     };
 
                     ui.vertical(|ui| {
-                        ui.small(format!("Node {:?}", node));
                         ui.separator();
                         ui.label(
                             egui::RichText::new(&topic_data.name)
@@ -1250,111 +1260,357 @@ impl SnarlViewer<NodeData> for BasicNodeViewer {
 }
 
 impl AMSAgents {
-    fn print_nodes_graph_snapshot(&self) {
-        let mut nodes: Vec<(usize, String, &'static str)> = self
+    fn selected_model_option(&self) -> Option<String> {
+        if self.selected_ollama_model.trim().is_empty() {
+            None
+        } else {
+            Some(self.selected_ollama_model.clone())
+        }
+    }
+
+    fn capture_runtime_settings(&self) -> RunRuntimeSettings {
+        RunRuntimeSettings {
+            selected_model: self.selected_model_option(),
+            http_endpoint: self.http_endpoint.clone(),
+            turn_delay_secs: self.conversation_turn_delay_secs,
+            history_size: self.conversation_history_size,
+            read_only_replay: self.read_only_replay_mode,
+        }
+    }
+
+    fn capture_graph_snapshot(&self) -> GraphSnapshot {
+        let mut nodes: Vec<ManifestNode> = self
             .nodes_panel
             .snarl
-            .nodes_ids_data()
-            .map(|(id, node)| {
-                let (name, kind) = match &node.value.payload {
-                    NodePayload::Manager(m) => (m.name.clone(), "Manager"),
-                    NodePayload::Worker(w) => (w.name.clone(), "Worker"),
-                    NodePayload::Conversation(c) => (c.name.clone(), "Conversation"),
-                    NodePayload::Evaluator(e) => (e.name.clone(), "Evaluator"),
-                    NodePayload::Researcher(r) => (r.name.clone(), "Researcher"),
-                    NodePayload::Topic(t) => (t.name.clone(), "Topic"),
+            .nodes_pos_ids()
+            .map(|(id, pos, node)| {
+                let (kind, config) = match &node.payload {
+                    NodePayload::Manager(m) => (
+                        "manager".to_string(),
+                        serde_json::json!({
+                            "name": m.name,
+                            "global_id": m.global_id,
+                        }),
+                    ),
+                    NodePayload::Worker(w) => (
+                        "worker".to_string(),
+                        serde_json::json!({
+                            "name": w.name,
+                            "global_id": w.global_id,
+                            "instruction_mode": w.instruction_mode,
+                            "instruction": w.instruction,
+                            "analysis_mode": w.analysis_mode,
+                            "conversation_topic": w.conversation_topic,
+                            "conversation_topic_source": w.conversation_topic_source,
+                        }),
+                    ),
+                    NodePayload::Conversation(c) => (
+                        "conversation".to_string(),
+                        serde_json::json!({
+                            "name": c.name,
+                            "global_id": c.global_id,
+                            "conversation_mode": c.conversation_mode,
+                            "conversation_active": c.conversation_active,
+                        }),
+                    ),
+                    NodePayload::Evaluator(e) => (
+                        "evaluator".to_string(),
+                        serde_json::json!({
+                            "name": e.name,
+                            "global_id": e.global_id,
+                            "analysis_mode": e.analysis_mode,
+                            "instruction": e.instruction,
+                            "limit_token": e.limit_token,
+                            "num_predict": e.num_predict,
+                            "active": e.active,
+                        }),
+                    ),
+                    NodePayload::Researcher(r) => (
+                        "researcher".to_string(),
+                        serde_json::json!({
+                            "name": r.name,
+                            "global_id": r.global_id,
+                            "topic_mode": r.topic_mode,
+                            "instruction": r.instruction,
+                            "limit_token": r.limit_token,
+                            "num_predict": r.num_predict,
+                            "active": r.active,
+                        }),
+                    ),
+                    NodePayload::Topic(t) => (
+                        "topic".to_string(),
+                        serde_json::json!({
+                            "name": t.name,
+                            "global_id": t.global_id,
+                            "analysis_mode": t.analysis_mode,
+                            "topic": t.topic,
+                        }),
+                    ),
                 };
-                (id.0, name, kind)
+                ManifestNode {
+                    node_id: id.0,
+                    kind,
+                    label: node.label.clone(),
+                    pos_x: pos.x,
+                    pos_y: pos.y,
+                    open: self
+                        .nodes_panel
+                        .snarl
+                        .get_node_info(id)
+                        .map(|n| n.open)
+                        .unwrap_or(true),
+                    config,
+                }
             })
             .collect();
-        nodes.sort_by_key(|(id, _, _)| *id);
+        nodes.sort_by_key(|n| n.node_id);
 
-        let label_by_id: HashMap<usize, String> = nodes
-            .iter()
-            .map(|(id, name, kind)| (*id, format!("{} [{}]", name, kind)))
+        let mut edges: Vec<ManifestEdge> = self
+            .nodes_panel
+            .snarl
+            .wires()
+            .map(|(from, to)| ManifestEdge {
+                from_node_id: from.node.0,
+                from_output_pin: from.output,
+                to_node_id: to.node.0,
+                to_input_pin: to.input,
+            })
             .collect();
+        edges.sort_by_key(|e| (e.from_node_id, e.from_output_pin, e.to_node_id, e.to_input_pin));
 
-        let mut edges: Vec<String> = Vec::new();
-        for (id, node) in self.nodes_panel.snarl.nodes_ids_data() {
-            match &node.value.payload {
-                NodePayload::Worker(w) => {
-                    if let Some(mid) = w.manager_node {
-                        edges.push(format!(
-                            "{} -> {}  (manager_to_worker)",
-                            label_by_id.get(&mid.0).cloned().unwrap_or_else(|| format!("Node {}", mid.0)),
-                            label_by_id.get(&id.0).cloned().unwrap_or_else(|| format!("Node {}", id.0)),
-                        ));
-                    }
-                    if let Some(tid) = w.topic_node {
-                        edges.push(format!(
-                            "{} -> {}  (topic_to_worker)",
-                            label_by_id.get(&tid.0).cloned().unwrap_or_else(|| format!("Node {}", tid.0)),
-                            label_by_id.get(&id.0).cloned().unwrap_or_else(|| format!("Node {}", id.0)),
-                        ));
-                    }
+        GraphSnapshot { nodes, edges }
+    }
+
+    fn build_run_manifest(
+        &self,
+        experiment_id_override: Option<String>,
+        read_only_replay: bool,
+    ) -> anyhow::Result<RunManifest> {
+        let mut runtime = self.capture_runtime_settings();
+        runtime.read_only_replay = read_only_replay;
+        let graph = self.capture_graph_snapshot();
+        let graph_signature = canonical_graph_signature(&runtime, &graph)?;
+        let experiment_id = experiment_id_override
+            .unwrap_or_else(|| derive_experiment_id(&graph_signature));
+        let run_id = new_run_id();
+
+        Ok(RunManifest {
+            manifest_version: MANIFEST_VERSION.to_string(),
+            app_name: APP_NAME.to_string(),
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            created_at: now_rfc3339_utc(),
+            experiment_id,
+            run_id,
+            graph_signature,
+            runtime,
+            graph,
+        })
+    }
+
+    fn persist_active_manifest(&mut self, manifest: RunManifest) -> anyhow::Result<PathBuf> {
+        let path = write_manifest(&runs_root(), &manifest)?;
+        self.current_run_context = Some(RunContext {
+            manifest_version: manifest.manifest_version.clone(),
+            experiment_id: manifest.experiment_id.clone(),
+            run_id: manifest.run_id.clone(),
+        });
+        self.current_manifest = Some(manifest);
+        self.manifest_status_message = format!("Manifest saved: {}", path.display());
+        Ok(path)
+    }
+
+    pub(super) fn export_manifest_to_path(&mut self, path: PathBuf) -> anyhow::Result<()> {
+        let manifest = if let Some(existing) = &self.current_manifest {
+            existing.clone()
+        } else {
+            self.build_run_manifest(None, self.read_only_replay_mode)?
+        };
+        export_manifest_to(&manifest, &path)?;
+        self.current_manifest = Some(manifest);
+        self.manifest_status_message = format!("Manifest exported: {}", path.display());
+        Ok(())
+    }
+
+    fn clear_graph(&mut self) {
+        let ids: Vec<NodeId> = self.nodes_panel.snarl.nodes_ids_data().map(|(id, _)| id).collect();
+        for id in ids {
+            self.nodes_panel.snarl.remove_node(id);
+        }
+    }
+
+    pub(super) fn load_manifest_from_path(&mut self, path: PathBuf) -> anyhow::Result<()> {
+        let manifest = read_manifest(&path)?;
+        self.stop_graph();
+        self.clear_graph();
+
+        let mut id_map: HashMap<usize, NodeId> = HashMap::new();
+        let mut nodes_sorted = manifest.graph.nodes.clone();
+        nodes_sorted.sort_by_key(|n| n.node_id);
+
+        for node in nodes_sorted {
+            let kind = node.kind.as_str();
+            let pos = egui::pos2(node.pos_x, node.pos_y);
+            let mut node_data = match kind {
+                "manager" => NodeData::new_manager(),
+                "worker" => NodeData::new_worker(),
+                "conversation" => NodeData::new_conversation(),
+                "evaluator" => NodeData::new_evaluator(),
+                "researcher" => NodeData::new_researcher(),
+                "topic" => NodeData::new_topic(),
+                _ => continue,
+            };
+            node_data.label = node.label.clone();
+            match (&mut node_data.payload, kind) {
+                (NodePayload::Manager(m), "manager") => {
+                    m.name = node.config["name"].as_str().unwrap_or(&m.name).to_string();
+                    m.global_id = node.config["global_id"]
+                        .as_str()
+                        .unwrap_or(&m.global_id)
+                        .to_string();
                 }
-                NodePayload::Conversation(c) => {
-                    if let Some(wid) = c.worker_a_node {
-                        edges.push(format!(
-                            "{} -> {}  (worker_to_conversation_A)",
-                            label_by_id.get(&wid.0).cloned().unwrap_or_else(|| format!("Node {}", wid.0)),
-                            label_by_id.get(&id.0).cloned().unwrap_or_else(|| format!("Node {}", id.0)),
-                        ));
-                    }
-                    if let Some(wid) = c.worker_b_node {
-                        edges.push(format!(
-                            "{} -> {}  (worker_to_conversation_B)",
-                            label_by_id.get(&wid.0).cloned().unwrap_or_else(|| format!("Node {}", wid.0)),
-                            label_by_id.get(&id.0).cloned().unwrap_or_else(|| format!("Node {}", id.0)),
-                        ));
-                    }
+                (NodePayload::Worker(w), "worker") => {
+                    w.name = node.config["name"].as_str().unwrap_or(&w.name).to_string();
+                    w.global_id = node.config["global_id"]
+                        .as_str()
+                        .unwrap_or(&w.global_id)
+                        .to_string();
+                    w.instruction_mode = node.config["instruction_mode"]
+                        .as_str()
+                        .unwrap_or(&w.instruction_mode)
+                        .to_string();
+                    w.instruction = node.config["instruction"]
+                        .as_str()
+                        .unwrap_or(&w.instruction)
+                        .to_string();
+                    w.analysis_mode = node.config["analysis_mode"]
+                        .as_str()
+                        .unwrap_or(&w.analysis_mode)
+                        .to_string();
+                    w.conversation_topic = node.config["conversation_topic"]
+                        .as_str()
+                        .unwrap_or(&w.conversation_topic)
+                        .to_string();
+                    w.conversation_topic_source = node.config["conversation_topic_source"]
+                        .as_str()
+                        .unwrap_or(&w.conversation_topic_source)
+                        .to_string();
                 }
-                NodePayload::Evaluator(e) => {
-                    if let Some(wid) = e.worker_node {
-                        edges.push(format!(
-                            "{} -> {}  (worker_to_evaluator)",
-                            label_by_id.get(&wid.0).cloned().unwrap_or_else(|| format!("Node {}", wid.0)),
-                            label_by_id.get(&id.0).cloned().unwrap_or_else(|| format!("Node {}", id.0)),
-                        ));
-                    }
-                    if let Some(mid) = e.manager_node {
-                        edges.push(format!(
-                            "{} -> {}  (evaluator_to_manager)",
-                            label_by_id.get(&id.0).cloned().unwrap_or_else(|| format!("Node {}", id.0)),
-                            label_by_id.get(&mid.0).cloned().unwrap_or_else(|| format!("Node {}", mid.0)),
-                        ));
-                    }
+                (NodePayload::Conversation(c), "conversation") => {
+                    c.name = node.config["name"].as_str().unwrap_or(&c.name).to_string();
+                    c.global_id = node.config["global_id"]
+                        .as_str()
+                        .unwrap_or(&c.global_id)
+                        .to_string();
+                    c.conversation_mode = node.config["conversation_mode"]
+                        .as_str()
+                        .unwrap_or(&c.conversation_mode)
+                        .to_string();
                 }
-                NodePayload::Researcher(r) => {
-                    if let Some(wid) = r.worker_node {
-                        edges.push(format!(
-                            "{} -> {}  (worker_to_researcher)",
-                            label_by_id.get(&wid.0).cloned().unwrap_or_else(|| format!("Node {}", wid.0)),
-                            label_by_id.get(&id.0).cloned().unwrap_or_else(|| format!("Node {}", id.0)),
-                        ));
-                    }
-                    if let Some(mid) = r.manager_node {
-                        edges.push(format!(
-                            "{} -> {}  (researcher_to_manager)",
-                            label_by_id.get(&id.0).cloned().unwrap_or_else(|| format!("Node {}", id.0)),
-                            label_by_id.get(&mid.0).cloned().unwrap_or_else(|| format!("Node {}", mid.0)),
-                        ));
-                    }
+                (NodePayload::Evaluator(e), "evaluator") => {
+                    e.name = node.config["name"].as_str().unwrap_or(&e.name).to_string();
+                    e.global_id = node.config["global_id"]
+                        .as_str()
+                        .unwrap_or(&e.global_id)
+                        .to_string();
+                    e.analysis_mode = node.config["analysis_mode"]
+                        .as_str()
+                        .unwrap_or(&e.analysis_mode)
+                        .to_string();
+                    e.instruction = node.config["instruction"]
+                        .as_str()
+                        .unwrap_or(&e.instruction)
+                        .to_string();
+                    e.limit_token = node.config["limit_token"].as_bool().unwrap_or(e.limit_token);
+                    e.num_predict = node.config["num_predict"]
+                        .as_str()
+                        .unwrap_or(&e.num_predict)
+                        .to_string();
+                    e.active = node.config["active"].as_bool().unwrap_or(e.active);
                 }
-                NodePayload::Manager(_) | NodePayload::Topic(_) => {}
+                (NodePayload::Researcher(r), "researcher") => {
+                    r.name = node.config["name"].as_str().unwrap_or(&r.name).to_string();
+                    r.global_id = node.config["global_id"]
+                        .as_str()
+                        .unwrap_or(&r.global_id)
+                        .to_string();
+                    r.topic_mode = node.config["topic_mode"]
+                        .as_str()
+                        .unwrap_or(&r.topic_mode)
+                        .to_string();
+                    r.instruction = node.config["instruction"]
+                        .as_str()
+                        .unwrap_or(&r.instruction)
+                        .to_string();
+                    r.limit_token = node.config["limit_token"].as_bool().unwrap_or(r.limit_token);
+                    r.num_predict = node.config["num_predict"]
+                        .as_str()
+                        .unwrap_or(&r.num_predict)
+                        .to_string();
+                    r.active = node.config["active"].as_bool().unwrap_or(r.active);
+                }
+                (NodePayload::Topic(t), "topic") => {
+                    t.name = node.config["name"].as_str().unwrap_or(&t.name).to_string();
+                    t.global_id = node.config["global_id"]
+                        .as_str()
+                        .unwrap_or(&t.global_id)
+                        .to_string();
+                    t.analysis_mode = node.config["analysis_mode"]
+                        .as_str()
+                        .unwrap_or(&t.analysis_mode)
+                        .to_string();
+                    t.topic = node.config["topic"].as_str().unwrap_or(&t.topic).to_string();
+                }
+                _ => {}
             }
-        }
-        edges.sort();
 
-        println!("=== Run Graph ===");
-        println!("Nodes ({}):", nodes.len());
-        for (id, name, kind) in &nodes {
-            println!("  [{}] {} ({})", id, name, kind);
+            let new_id = self.nodes_panel.snarl.insert_node(pos, node_data);
+            self.nodes_panel.snarl.open_node(new_id, node.open);
+            id_map.insert(node.node_id, new_id);
         }
-        println!("Edges ({}):", edges.len());
-        for e in &edges {
-            println!("  {}", e);
+
+        for edge in &manifest.graph.edges {
+            let Some(from_id) = id_map.get(&edge.from_node_id) else {
+                continue;
+            };
+            let Some(to_id) = id_map.get(&edge.to_node_id) else {
+                continue;
+            };
+            self.nodes_panel.snarl.connect(
+                OutPinId {
+                    node: *from_id,
+                    output: edge.from_output_pin,
+                },
+                InPinId {
+                    node: *to_id,
+                    input: edge.to_input_pin,
+                },
+            );
         }
+
+        self.selected_ollama_model = manifest
+            .runtime
+            .selected_model
+            .clone()
+            .unwrap_or_default();
+        self.http_endpoint = manifest.runtime.http_endpoint.clone();
+        self.conversation_turn_delay_secs = manifest.runtime.turn_delay_secs;
+        self.conversation_history_size = manifest.runtime.history_size;
+
+        self.read_only_replay_mode = true;
+        self.current_run_context = Some(RunContext {
+            manifest_version: manifest.manifest_version.clone(),
+            experiment_id: manifest.experiment_id.clone(),
+            run_id: manifest.run_id.clone(),
+        });
+        self.current_manifest = Some(manifest);
+        self.manifest_status_message = format!("Loaded replay manifest: {}", path.display());
+        Ok(())
+    }
+
+    pub(super) fn run_from_manifest_path(&mut self, path: PathBuf) -> anyhow::Result<()> {
+        self.load_manifest_from_path(path)?;
+        self.run_graph();
+        Ok(())
     }
 
     fn stop_graph(&mut self) {
@@ -1375,6 +1631,30 @@ impl AMSAgents {
     fn run_graph(&mut self) {
         // Bulletproof behavior: re-run means stop existing graph processes first.
         self.stop_graph();
+
+        let experiment_id_override = if self.read_only_replay_mode {
+            self.current_manifest
+                .as_ref()
+                .map(|m| m.experiment_id.clone())
+        } else {
+            None
+        };
+        let manifest = match self.build_run_manifest(
+            experiment_id_override,
+            self.read_only_replay_mode,
+        ) {
+            Ok(m) => m,
+            Err(e) => {
+                self.manifest_status_message = format!("Manifest build failed: {e}");
+                eprintln!("[Run Graph] Manifest build failed: {e}");
+                return;
+            }
+        };
+        if let Err(e) = self.persist_active_manifest(manifest) {
+            self.manifest_status_message = format!("Manifest save failed: {e}");
+            eprintln!("[Run Graph] Manifest save failed: {e}");
+            return;
+        }
 
         let mut to_start: Vec<(
             NodeId,
@@ -1528,6 +1808,7 @@ impl AMSAgents {
         let history_size = self.conversation_history_size;
         let turn_delay_secs = self.conversation_turn_delay_secs;
         let handle = self.rt_handle.clone();
+        let run_context = self.current_run_context.clone();
 
         let loop_handle = handle.spawn(async move {
             crate::agent_conversation_loop::start_conversation_loop(
@@ -1548,6 +1829,7 @@ impl AMSAgents {
                 selected_model,
                 history_size,
                 turn_delay_secs,
+                run_context,
             )
             .await;
         });
@@ -1559,70 +1841,174 @@ impl AMSAgents {
     pub(super) fn render_nodes_panel(&mut self, ui: &mut egui::Ui) {
         let panel_border_color = ui.visuals().widgets.noninteractive.bg_stroke.color;
         let nodes_panel = egui::Frame::default()
-            .fill(egui::Color32::from_rgb(40, 40, 40))
+            .fill(ui.visuals().panel_fill)
             .stroke(egui::Stroke::new(1.0, panel_border_color))
             .corner_radius(4.0)
             .inner_margin(egui::Margin::same(6));
 
-        // Nodes panel extends to bottom of window (no fixed Outgoing HTTP panel).
         let panel_height = ui.available_height().max(120.0);
         let mut viewer = BasicNodeViewer;
-
-        // Customize Snarl appearance:
-        // - start zoom at ~1.0 (clamp initial scaling)
-        // - place pins on the node edge (the "ball" on border)
-        // - thin grey grid lines
-        let mut style = SnarlStyle::new();
-        style.min_scale = Some(0.25);
-        style.max_scale = Some(2.0);
-        style.pin_placement = Some(PinPlacement::Edge);
-        style.wire_style = Some(self.nodes_panel.wire_style);
-        style.wire_width = Some(3.0);
-        style.wire_smoothness = Some(0.0);
-        style.pin_stroke = Some(egui::Stroke::new(1.5, egui::Color32::from_gray(200)));
-        // Vertical + horizontal grid (no rotation).
-        style.bg_pattern = Some(BackgroundPattern::grid(egui::vec2(50.0, 50.0), 0.0));
-        style.bg_pattern_stroke = Some(egui::Stroke::new(
-            1.0,
-            egui::Color32::from_gray(110).gamma_multiply(0.5),
-        ));
 
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), panel_height),
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
                 nodes_panel.show(ui, |ui| {
-                    let mut run_graph_requested = false;
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Nodes").strong().size(12.0));
-                        ui.add_space(8.0);
-                        let label = match self.nodes_panel.wire_style {
-                            WireStyle::Bezier5 => "Wires: Bezier5",
-                            WireStyle::Line => "Wires: Line",
-                            _ => "Wires: (custom)",
-                        };
-                        if ui.button(label).clicked() {
-                            self.nodes_panel.wire_style = match self.nodes_panel.wire_style {
-                                WireStyle::Bezier5 => WireStyle::Line,
-                                _ => WireStyle::Bezier5,
-                            };
+                        if ui
+                            .selectable_label(
+                                self.nodes_panel.active_tab == PanelTab::Overview,
+                                "Overview",
+                            )
+                            .clicked()
+                        {
+                            self.nodes_panel.active_tab = PanelTab::Overview;
                         }
-                        if ui.button("Run Graph").clicked() {
-                            run_graph_requested = true;
+                        if ui
+                            .selectable_label(
+                                self.nodes_panel.active_tab == PanelTab::Agents,
+                                "Agents",
+                            )
+                            .clicked()
+                        {
+                            self.nodes_panel.active_tab = PanelTab::Agents;
                         }
-                        if ui.button("Stop Graph").clicked() {
-                            self.stop_graph();
+                        if ui
+                            .selectable_label(
+                                self.nodes_panel.active_tab == PanelTab::Ollama,
+                                "Ollama",
+                            )
+                            .clicked()
+                        {
+                            self.nodes_panel.active_tab = PanelTab::Ollama;
+                        }
+                        if ui
+                            .selectable_label(
+                                self.nodes_panel.active_tab == PanelTab::Settings,
+                                "Settings",
+                            )
+                            .clicked()
+                        {
+                            self.nodes_panel.active_tab = PanelTab::Settings;
                         }
                     });
-                    ui.add_space(4.0);
-                    SnarlWidget::new()
-                        .id_salt("ams_nodes_panel_v2")
-                        .style(style)
-                        .show(&mut self.nodes_panel.snarl, &mut viewer, ui);
-                    if run_graph_requested {
-                        self.print_nodes_graph_snapshot();
-                        self.run_graph();
+                    ui.separator();
+
+                    if self.nodes_panel.active_tab == PanelTab::Overview {
+                        ui.label("Lorem ipsum");
+                        return;
                     }
+                    if self.nodes_panel.active_tab == PanelTab::Ollama {
+                        let ctx = ui.ctx().clone();
+                        self.render_ollama_settings_widgets(ui, &ctx);
+                        return;
+                    }
+                    if self.nodes_panel.active_tab == PanelTab::Settings {
+                        self.render_reproducibility_settings_widgets(ui);
+                        return;
+                    }
+
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Agents").strong().size(12.0));
+                        ui.add_space(8.0);
+                        egui::ComboBox::from_id_salt("add_agent_kind")
+                            .selected_text(self.nodes_panel.selected_add_kind.label())
+                            .show_ui(ui, |ui| {
+                                for kind in [
+                                    AgentNodeKind::Manager,
+                                    AgentNodeKind::Worker,
+                                    AgentNodeKind::Evaluator,
+                                    AgentNodeKind::Researcher,
+                                    AgentNodeKind::Topic,
+                                    AgentNodeKind::Conversation,
+                                ] {
+                                    ui.selectable_value(
+                                        &mut self.nodes_panel.selected_add_kind,
+                                        kind,
+                                        kind.label(),
+                                    );
+                                }
+                            });
+                        if ui
+                            .add_enabled(!self.read_only_replay_mode, egui::Button::new("Add"))
+                            .clicked()
+                        {
+                            let mut node = match self.nodes_panel.selected_add_kind {
+                                AgentNodeKind::Manager => NodeData::new_manager(),
+                                AgentNodeKind::Worker => NodeData::new_worker(),
+                                AgentNodeKind::Evaluator => NodeData::new_evaluator(),
+                                AgentNodeKind::Researcher => NodeData::new_researcher(),
+                                AgentNodeKind::Topic => NodeData::new_topic(),
+                                AgentNodeKind::Conversation => NodeData::new_conversation(),
+                            };
+                            node.set_name(BasicNodeViewer::numbered_name_for_kind(
+                                &self.nodes_panel.snarl,
+                                self.nodes_panel.selected_add_kind,
+                            ));
+                            self.nodes_panel.snarl.insert_node(egui::pos2(0.0, 0.0), node);
+                        }
+                        if self.read_only_replay_mode {
+                            ui.label(egui::RichText::new("Replay mode (read-only)").weak());
+                        }
+                    });
+                    ui.separator();
+
+                    let node_ids: Vec<NodeId> = self
+                        .nodes_panel
+                        .snarl
+                        .nodes_ids_data()
+                        .map(|(id, _)| id)
+                        .collect();
+
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for node_id in node_ids {
+                            let Some(node) = self.nodes_panel.snarl.get_node(node_id) else {
+                                continue;
+                            };
+                            let global_id = match &node.payload {
+                                NodePayload::Manager(m) => m.global_id.as_str(),
+                                NodePayload::Worker(w) => w.global_id.as_str(),
+                                NodePayload::Conversation(c) => c.global_id.as_str(),
+                                NodePayload::Evaluator(e) => e.global_id.as_str(),
+                                NodePayload::Researcher(r) => r.global_id.as_str(),
+                                NodePayload::Topic(t) => t.global_id.as_str(),
+                            };
+                            let header = format!("{}  •  {}", node.label, global_id);
+                            let kind = node.kind;
+                            let inputs: Vec<InPin> = (0..kind.inputs())
+                                .map(|input| {
+                                    self.nodes_panel.snarl.in_pin(InPinId {
+                                        node: node_id,
+                                        input,
+                                    })
+                                })
+                                .collect();
+                            let outputs: Vec<OutPin> = (0..kind.outputs())
+                                .map(|output| {
+                                    self.nodes_panel.snarl.out_pin(OutPinId {
+                                        node: node_id,
+                                        output,
+                                    })
+                                })
+                                .collect();
+
+                            ui.set_width(ui.available_width());
+                            egui::CollapsingHeader::new(header)
+                                .id_salt(("agent_row", node_id.0))
+                                .show(ui, |ui| {
+                                    ui.add_enabled_ui(!self.read_only_replay_mode, |ui| {
+                                        viewer.show_body(
+                                            node_id,
+                                            &inputs,
+                                            &outputs,
+                                            ui,
+                                            &mut self.nodes_panel.snarl,
+                                        );
+                                    });
+                                });
+                            ui.add_space(4.0);
+                        }
+                    });
                 });
 
                 let ctx = ui.ctx().clone();
@@ -1748,6 +2134,7 @@ impl AMSAgents {
                     let num_predict = e.num_predict.clone();
                     let endpoint = self.http_endpoint.clone();
                     let has_output_nodes = has_output_nodes;
+                    let run_context = self.current_run_context.clone();
                     let ctx = ctx.clone();
                     let handle = self.rt_handle.clone();
                     let selected_model = if self.selected_ollama_model.trim().is_empty() {
@@ -1803,6 +2190,7 @@ impl AMSAgents {
                                         "Agent Evaluator",
                                         sentiment,
                                         &response,
+                                        run_context.as_ref(),
                                     )
                                     .await
                                     {
@@ -1856,6 +2244,7 @@ impl AMSAgents {
                     let num_predict = r.num_predict.clone();
                     let endpoint = self.http_endpoint.clone();
                     let has_output_nodes = has_output_nodes;
+                    let run_context = self.current_run_context.clone();
                     let ctx = ctx.clone();
                     let handle = self.rt_handle.clone();
                     let selected_model = if self.selected_ollama_model.trim().is_empty() {
@@ -1880,6 +2269,7 @@ impl AMSAgents {
                                         "Agent Researcher",
                                         &topic,
                                         &response,
+                                        run_context.as_ref(),
                                     )
                                     .await
                                     {

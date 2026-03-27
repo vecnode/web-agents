@@ -1,6 +1,7 @@
 use serde::{Serialize, Deserialize};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+use crate::reproducibility::RunContext;
 
 static OUTGOING_HTTP_LOG: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 
@@ -41,6 +42,9 @@ pub struct ConversationMessage {
     pub topic: String,
     pub message: String,
     pub timestamp: String,
+    pub experiment_id: Option<String>,
+    pub run_id: Option<String>,
+    pub manifest_version: Option<String>,
 }
 
 pub async fn send_conversation_message(
@@ -51,6 +55,7 @@ pub async fn send_conversation_message(
     receiver_name: &str,
     topic: &str,
     message: &str,
+    run_context: Option<&RunContext>,
 ) -> Result<(), anyhow::Error> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -69,6 +74,9 @@ pub async fn send_conversation_message(
         topic: topic.to_string(),
         message: message.to_string(),
         timestamp: timestamp_str,
+        experiment_id: run_context.map(|c| c.experiment_id.clone()),
+        run_id: run_context.map(|c| c.run_id.clone()),
+        manifest_version: run_context.map(|c| c.manifest_version.clone()),
     };
 
     push_outgoing_http_log_line(format!(
@@ -99,6 +107,9 @@ pub struct EvaluatorResult {
     pub sentiment: String,
     pub message: String,
     pub timestamp: String,
+    pub experiment_id: Option<String>,
+    pub run_id: Option<String>,
+    pub manifest_version: Option<String>,
 }
 
 pub async fn send_evaluator_result(
@@ -106,6 +117,7 @@ pub async fn send_evaluator_result(
     evaluator_name: &str,
     sentiment: &str,
     message: &str,
+    run_context: Option<&RunContext>,
 ) -> Result<(), anyhow::Error> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -119,6 +131,9 @@ pub async fn send_evaluator_result(
         sentiment: sentiment.to_string(),
         message: message.to_string(),
         timestamp: timestamp_str,
+        experiment_id: run_context.map(|c| c.experiment_id.clone()),
+        run_id: run_context.map(|c| c.run_id.clone()),
+        manifest_version: run_context.map(|c| c.manifest_version.clone()),
     };
     push_outgoing_http_log_line(format!(
         "POST {} | evaluator {} [{}] | {}",
@@ -140,6 +155,7 @@ pub async fn send_researcher_result(
     researcher_name: &str,
     topic: &str,
     message: &str,
+    run_context: Option<&RunContext>,
 ) -> Result<(), anyhow::Error> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -153,6 +169,9 @@ pub async fn send_researcher_result(
         sentiment: format!("references:{}", topic.to_lowercase()),
         message: message.to_string(),
         timestamp: timestamp_str,
+        experiment_id: run_context.map(|c| c.experiment_id.clone()),
+        run_id: run_context.map(|c| c.run_id.clone()),
+        manifest_version: run_context.map(|c| c.manifest_version.clone()),
     };
     push_outgoing_http_log_line(format!(
         "POST {} | researcher {} [{}] | {}",

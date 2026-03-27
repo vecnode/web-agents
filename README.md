@@ -5,11 +5,14 @@ Agents Research Platform for HCI and Cognitive Sciences.
 
 ### Overview
 
-This app runs agent workflows as a node graph.  
-Each node does one role, and edges define execution/data flow.
+- Multi-agent conversations
+- Prompt design and injection
+- Reproducibility of inference
+- Local and field-first architecture
 
 
-## Building
+
+### Building
 
 ```sh
 # Development: Builds to 'target/debug/'
@@ -19,7 +22,7 @@ cargo run
 cargo build --release
 ```
 
-## Current Architecture
+### Current Architecture
 
 - `Agent` nodes: `Agent Manager`, `Agent Worker`, `Agent Evaluator`, `Agent Researcher`
 - `Tool` nodes: `Topic` (provides topic preset + topic text to Workers)
@@ -48,6 +51,20 @@ Set `CONVERSATION_HTTP_ENDPOINT` to your receiver URL (default: `http://localhos
 To build a receiver app, expose one `POST` endpoint, parse these fields, and branch by keys:
 if payload has `sender_id` => conversation event; if payload has `evaluator_name` => evaluator/researcher event.
 All timestamps are RFC3339 UTC strings.
+
+### Reproducible Runs
+
+Each `Run Graph` execution now creates a run manifest for reproducibility:
+
+- Path: `runs/<experiment_id>/<run_id>/manifest.json`
+- Schema version: `manifest_version = "1.0.0"`
+- Manifest captures runtime settings and a canonical node graph snapshot
+- Outbound HTTP events include `experiment_id`, `run_id`, and `manifest_version`
+
+Settings panel includes:
+
+- `Export Manifest`: write the current manifest to a custom path
+- `Run From Manifest`: load a manifest in read-only replay mode and execute it
 
 
 ### Dependencies
