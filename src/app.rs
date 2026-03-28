@@ -1,4 +1,4 @@
-use crate::agent_entities::{Agent, AgentManager, Evaluator, Researcher};
+use crate::agent_entities::{Evaluator, Researcher};
 use crate::event_ledger::EventLedger;
 use crate::reproducibility::{RunContext, RunManifest};
 use eframe::egui;
@@ -13,8 +13,6 @@ pub struct AMSAgents {
     ollama_models: Arc<Mutex<Vec<String>>>,
     ollama_models_loading: Arc<Mutex<bool>>,
     selected_ollama_model: String,
-    managers: Vec<AgentManager>,
-    agents: Vec<Agent>,
     evaluators: Vec<Evaluator>,
     researchers: Vec<Researcher>,
     conversation_turn_delay_secs: u64,
@@ -63,8 +61,6 @@ impl AMSAgents {
             ollama_models: Arc::new(Mutex::new(Vec::new())),
             ollama_models_loading: Arc::new(Mutex::new(false)),
             selected_ollama_model: std::env::var("OLLAMA_MODEL").unwrap_or_default(),
-            managers: Vec::new(),
-            agents: Vec::new(),
             evaluators: Vec::new(),
             researchers: Vec::new(),
             conversation_turn_delay_secs: 3,
