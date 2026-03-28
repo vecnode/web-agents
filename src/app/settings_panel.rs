@@ -161,6 +161,24 @@ impl AMSAgents {
                     }
                 }
             });
+            ui.horizontal(|ui| {
+                ui.label("Run bundle (zip) path:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.bundle_export_path).desired_width(300.0),
+                );
+                if ui
+                    .button("Download Run Bundle")
+                    .on_hover_text(
+                        "Zip manifest.json, events.jsonl, and summary.json for the current run.",
+                    )
+                    .clicked()
+                {
+                    let p = PathBuf::from(self.bundle_export_path.trim());
+                    if let Err(e) = self.download_run_bundle_to_path(p) {
+                        self.manifest_status_message = format!("Run bundle failed: {e}");
+                    }
+                }
+            });
             if !self.manifest_status_message.trim().is_empty() {
                 ui.label(&self.manifest_status_message);
             }

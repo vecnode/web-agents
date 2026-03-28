@@ -1,6 +1,7 @@
+use crate::event_ledger::EventLedger;
 use crate::reproducibility::RunContext;
 use serde::{Deserialize, Serialize};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static OUTGOING_HTTP_LOG: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
@@ -56,6 +57,7 @@ pub async fn send_conversation_message(
     topic: &str,
     message: &str,
     run_context: Option<&RunContext>,
+    ledger: Option<&Arc<EventLedger>>,
 ) -> Result<(), anyhow::Error> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -79,6 +81,8 @@ pub async fn send_conversation_message(
         manifest_version: run_context.map(|c| c.manifest_version.clone()),
     };
 
+    let payload_json = serde_json::to_string(&payload)?;
+
     push_outgoing_http_log_line(format!(
         "POST {} | conversation | {} -> {} | {}",
         endpoint,
@@ -88,10 +92,42 @@ pub async fn send_conversation_message(
     ));
 
     let client = reqwest::Client::new();
-    let response = client.post(endpoint).json(&payload).send().await?;
+    let response = match client.post(endpoint).json(&payload).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            if let Some(l) = ledger {
+                let _ = l.append_transport_http(
+                    "conversation",
+                    &payload_json,
+                    &e.to_string(),
+                    None,
+                    Some(&e.to_string()),
+                );
+            }
+            return Err(anyhow::anyhow!(e));
+        }
+    };
+    let status = response.status();
+    let code = status.as_u16();
+    let body_text = response.text().await.unwrap_or_default();
 
-    if !response.status().is_success() {
-        eprintln!("HTTP request failed: {}", response.status());
+    if let Some(l) = ledger {
+        let err = if status.is_success() {
+            None
+        } else {
+            Some(format!("HTTP {}", code))
+        };
+        let _ = l.append_transport_http(
+            "conversation",
+            &payload_json,
+            &body_text,
+            Some(code),
+            err.as_deref(),
+        );
+    }
+
+    if !status.is_success() {
+        anyhow::bail!("conversation HTTP {}: {}", code, trim_line(&body_text, 200));
     }
 
     Ok(())
@@ -114,6 +150,7 @@ pub async fn send_evaluator_result(
     sentiment: &str,
     message: &str,
     run_context: Option<&RunContext>,
+    ledger: Option<&Arc<EventLedger>>,
 ) -> Result<(), anyhow::Error> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -131,6 +168,8 @@ pub async fn send_evaluator_result(
         run_id: run_context.map(|c| c.run_id.clone()),
         manifest_version: run_context.map(|c| c.manifest_version.clone()),
     };
+    let payload_json = serde_json::to_string(&payload)?;
+
     push_outgoing_http_log_line(format!(
         "POST {} | evaluator {} [{}] | {}",
         endpoint,
@@ -139,9 +178,42 @@ pub async fn send_evaluator_result(
         trim_line(message, 90),
     ));
     let client = reqwest::Client::new();
-    let response = client.post(endpoint).json(&payload).send().await?;
-    if !response.status().is_success() {
-        eprintln!("HTTP evaluator request failed: {}", response.status());
+    let response = match client.post(endpoint).json(&payload).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            if let Some(l) = ledger {
+                let _ = l.append_transport_http(
+                    "evaluator",
+                    &payload_json,
+                    &e.to_string(),
+                    None,
+                    Some(&e.to_string()),
+                );
+            }
+            return Err(anyhow::anyhow!(e));
+        }
+    };
+    let status = response.status();
+    let code = status.as_u16();
+    let body_text = response.text().await.unwrap_or_default();
+
+    if let Some(l) = ledger {
+        let err = if status.is_success() {
+            None
+        } else {
+            Some(format!("HTTP {}", code))
+        };
+        let _ = l.append_transport_http(
+            "evaluator",
+            &payload_json,
+            &body_text,
+            Some(code),
+            err.as_deref(),
+        );
+    }
+
+    if !status.is_success() {
+        anyhow::bail!("evaluator HTTP {}: {}", code, trim_line(&body_text, 200));
     }
     Ok(())
 }
@@ -152,6 +224,7 @@ pub async fn send_researcher_result(
     topic: &str,
     message: &str,
     run_context: Option<&RunContext>,
+    ledger: Option<&Arc<EventLedger>>,
 ) -> Result<(), anyhow::Error> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -169,6 +242,8 @@ pub async fn send_researcher_result(
         run_id: run_context.map(|c| c.run_id.clone()),
         manifest_version: run_context.map(|c| c.manifest_version.clone()),
     };
+    let payload_json = serde_json::to_string(&payload)?;
+
     push_outgoing_http_log_line(format!(
         "POST {} | researcher {} [{}] | {}",
         endpoint,
@@ -177,9 +252,42 @@ pub async fn send_researcher_result(
         trim_line(message, 90),
     ));
     let client = reqwest::Client::new();
-    let response = client.post(endpoint).json(&payload).send().await?;
-    if !response.status().is_success() {
-        eprintln!("HTTP researcher request failed: {}", response.status());
+    let response = match client.post(endpoint).json(&payload).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            if let Some(l) = ledger {
+                let _ = l.append_transport_http(
+                    "researcher",
+                    &payload_json,
+                    &e.to_string(),
+                    None,
+                    Some(&e.to_string()),
+                );
+            }
+            return Err(anyhow::anyhow!(e));
+        }
+    };
+    let status = response.status();
+    let code = status.as_u16();
+    let body_text = response.text().await.unwrap_or_default();
+
+    if let Some(l) = ledger {
+        let err = if status.is_success() {
+            None
+        } else {
+            Some(format!("HTTP {}", code))
+        };
+        let _ = l.append_transport_http(
+            "researcher",
+            &payload_json,
+            &body_text,
+            Some(code),
+            err.as_deref(),
+        );
+    }
+
+    if !status.is_success() {
+        anyhow::bail!("researcher HTTP {}: {}", code, trim_line(&body_text, 200));
     }
     Ok(())
 }
