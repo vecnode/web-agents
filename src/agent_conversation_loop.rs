@@ -2,6 +2,7 @@ use crate::adk_integration::OllamaStopEpoch;
 use crate::event_ledger::EventLedger;
 use crate::http_client::{send_evaluator_result, send_researcher_result};
 use crate::reproducibility::RunContext;
+use futures_util::future::join_all;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -35,7 +36,8 @@ pub struct SidecarResearcher {
 
 // --- Pre-turn research injection (tweak wording / placement here) -----------------------
 
-const RESEARCH_INJECTION_HEADER: &str = "\n\n---\nResearch references for your turn (consider when responding):\n";
+const RESEARCH_INJECTION_HEADER: &str =
+    "\n\n---\nResearch references for your turn (consider when responding):\n";
 const RESEARCH_INJECTION_FOOTER: &str = "\n---\n";
 
 /// Where pre-turn research text is merged into the Ollama prompt for this worker turn.
@@ -67,33 +69,67 @@ pub fn apply_research_injection(
     injection.push_str(research_blocks);
     injection.push_str(RESEARCH_INJECTION_FOOTER);
     match placement {
-        ResearchInjectionPlacement::ConversationContext => conversation_context.push_str(&injection),
-        ResearchInjectionPlacement::EnhancedInstruction => enhanced_instruction.push_str(&injection),
+        ResearchInjectionPlacement::ConversationContext => {
+            conversation_context.push_str(&injection)
+        }
+        ResearchInjectionPlacement::EnhancedInstruction => {
+            enhanced_instruction.push_str(&injection)
+        }
     }
     (enhanced_instruction, conversation_context)
 }
 
-/// Topic label + full researcher Ollama instruction (shared by pre-turn injection).
-fn researcher_ollama_instruction(rs: &SidecarResearcher) -> (String, String) {
-    let topic = if rs.topic_mode.trim().is_empty() {
-        "Articles".to_string()
-    } else {
-        rs.topic_mode.clone()
-    };
-    let instruction = format!(
-        "{}\n\nUsing the latest chat message, suggest 3 {} references related to what was said. Keep it concise with bullet points: title and one-line why it matches.",
-        rs.instruction,
-        topic.to_lowercase()
-    );
-    (instruction, topic)
+/// Which utterance grounds pre-turn research (for ledger / debugging).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResearchMessageGrounding {
+    /// `message_for_research` is the tied worker's own last line in this dialogue.
+    TiedWorkerLastMessage,
+    /// Tied worker has not spoken yet; we use the partner's last line so first turn still gets references.
+    PartnerFallbackFirstTurn,
 }
 
-/// Run researchers that target `speaking_worker_id` on `message_for_research` (partner's last line),
-/// before that worker generates a reply. Outputs are merged for prompt injection; ledger/HTTP optional.
+/// Reference **category** from the Topics dropdown (Movies, Music, Articles, …) plus explicit grounding.
+fn researcher_pre_turn_instruction(
+    rs: &SidecarResearcher,
+    tied_worker_name: &str,
+    category: &str,
+    grounding: ResearchMessageGrounding,
+) -> String {
+    let ground_line = match grounding {
+        ResearchMessageGrounding::TiedWorkerLastMessage => format!(
+            "The text below is the **last message from worker \"{name}\"** (the agent this researcher is tied to via Injection). \
+             Base your suggestions only on that content.",
+            name = tied_worker_name,
+        ),
+        ResearchMessageGrounding::PartnerFallbackFirstTurn => format!(
+            "The tied worker \"{name}\" has not spoken yet in this dialogue. \
+             The text below is the **partner's last message**—use it as the only ground for your {category} suggestions until the tied worker has their own prior line.",
+            name = tied_worker_name,
+            category = category,
+        ),
+    };
+    format!(
+        "{}\n\nReference category: **{category}** (e.g. films, albums, papers—stay in this category).\n\
+         {ground_line}\n\
+         Suggest exactly 3 items in that category. Bullet points: title/name + one line why it fits.",
+        rs.instruction,
+        category = category,
+        ground_line = ground_line,
+    )
+}
+
+/// Run researchers targeting `speaking_worker_id` **before** that worker's reply.
+///
+/// **Latency:** This always runs **before** the dialogue model. Each researcher row is one extra Ollama
+/// round-trip; we run those in **parallel** when multiple researchers share the same injection worker.
+/// Expect roughly `(research time) + (dialogue time)` per turn when research is active—not a bug, but
+/// strictly more work than a plain dialogue turn.
 pub async fn run_researchers_before_worker_turn(
     sidecars: &ConversationSidecarConfig,
     speaking_worker_id: usize,
+    tied_worker_name: &str,
     message_for_research: &str,
+    grounding: ResearchMessageGrounding,
     ollama_host: &str,
     endpoint: &str,
     run_context: Option<&RunContext>,
@@ -102,24 +138,55 @@ pub async fn run_researchers_before_worker_turn(
     post_http: bool,
     ledger: Option<&Arc<EventLedger>>,
 ) -> Result<String, ()> {
-    let mut blocks = Vec::new();
-    for rs in &sidecars.researchers {
-        if rs.target_worker_id != speaking_worker_id {
-            continue;
+    let researchers: Vec<SidecarResearcher> = sidecars
+        .researchers
+        .iter()
+        .filter(|rs| rs.target_worker_id == speaking_worker_id)
+        .cloned()
+        .collect();
+
+    if researchers.is_empty() {
+        return Ok(String::new());
+    }
+
+    let msg = message_for_research.to_string();
+    let host = ollama_host.to_string();
+    let model = selected_model.map(|s| s.to_string());
+    let epoch = ollama_stop_epoch.clone();
+
+    let futures = researchers.into_iter().map(|rs| {
+        let msg = msg.clone();
+        let host = host.clone();
+        let model = model.clone();
+        let epoch = epoch.clone();
+        let tied = tied_worker_name.to_string();
+        let category = if rs.topic_mode.trim().is_empty() {
+            "Articles".to_string()
+        } else {
+            rs.topic_mode.clone()
+        };
+        let instruction = researcher_pre_turn_instruction(&rs, &tied, &category, grounding);
+        async move {
+            let ollama_input = format!("{}\n{}", instruction, msg);
+            let out = crate::adk_integration::send_to_ollama(
+                host.as_str(),
+                &instruction,
+                &msg,
+                rs.limit_token,
+                &rs.num_predict,
+                model.as_deref(),
+                epoch,
+            )
+            .await;
+            (rs, category, ollama_input, out)
         }
-        let (instruction, topic) = researcher_ollama_instruction(rs);
-        let ollama_input = format!("{}\n{}", instruction, message_for_research);
-        match crate::adk_integration::send_to_ollama(
-            ollama_host,
-            &instruction,
-            message_for_research,
-            rs.limit_token,
-            &rs.num_predict,
-            selected_model,
-            ollama_stop_epoch.clone(),
-        )
-        .await
-        {
+    });
+
+    let joined = join_all(futures).await;
+    let mut blocks = Vec::new();
+
+    for (rs, topic, ollama_input, out) in joined {
+        match out {
             Ok(response) => {
                 if let Some(l) = ledger {
                     let _ = l.append_with_hashes(
@@ -131,6 +198,10 @@ pub async fn run_researchers_before_worker_turn(
                         serde_json::json!({
                             "topic": topic,
                             "phase": "pre_turn_injection",
+                            "grounding": match grounding {
+                                ResearchMessageGrounding::TiedWorkerLastMessage => "tied_worker_last",
+                                ResearchMessageGrounding::PartnerFallbackFirstTurn => "partner_fallback",
+                            },
                         }),
                     );
                 }
@@ -402,13 +473,8 @@ pub async fn start_conversation_loop(
     let mut is_agent_a_turn = true;
     let mut history = ConversationHistory::new(history_size.max(1));
     let topics_summary = format!(
-        "Topics => {}: \"{}\" [{}] | {}: \"{}\" [{}]",
-        agent_a_name,
-        agent_a_topic,
-        agent_a_topic_source,
-        agent_b_name,
-        agent_b_topic,
-        agent_b_topic_source
+        "Topics => {}: \"{}\" | {}: \"{}\"",
+        agent_a_name, agent_a_topic, agent_b_name, agent_b_topic,
     );
 
     // Print conversation header
@@ -497,29 +563,37 @@ pub async fn start_conversation_loop(
             sender_topic.clone()
         };
 
-        // Pre-turn: researchers wired to this speaker run on the partner's last message, then we inject into context.
-        let research_injection =
-            if let Some(partner_line) = history.last_message_from_agent(receiver_id) {
-                match run_researchers_before_worker_turn(
-                    sidecars.as_ref(),
-                    sender_id,
-                    partner_line,
-                    ollama_host.as_str(),
-                    endpoint.as_str(),
-                    run_context.as_ref(),
-                    selected_model.as_deref(),
-                    ollama_stop_epoch.clone(),
-                    true,
-                    ledger.as_ref(),
-                )
-                .await
-                {
-                    Ok(s) => s,
-                    Err(()) => break,
-                }
-            } else {
-                String::new()
-            };
+        // Pre-turn: ground on the **tied worker's** last line when it exists; else partner line (first turn).
+        let research_injection = if let Some((line, grounding)) = history
+            .last_message_from_agent(sender_id)
+            .map(|t| (t, ResearchMessageGrounding::TiedWorkerLastMessage))
+            .or_else(|| {
+                history
+                    .last_message_from_agent(receiver_id)
+                    .map(|p| (p, ResearchMessageGrounding::PartnerFallbackFirstTurn))
+            }) {
+            match run_researchers_before_worker_turn(
+                sidecars.as_ref(),
+                sender_id,
+                sender_name.as_str(),
+                line,
+                grounding,
+                ollama_host.as_str(),
+                endpoint.as_str(),
+                run_context.as_ref(),
+                selected_model.as_deref(),
+                ollama_stop_epoch.clone(),
+                false,
+                ledger.as_ref(),
+            )
+            .await
+            {
+                Ok(s) => s,
+                Err(()) => break,
+            }
+        } else {
+            String::new()
+        };
 
         // Enhance instruction with conversation context
         let enhanced_instruction = format!(
@@ -609,6 +683,16 @@ pub async fn start_conversation_loop(
                 println!("\n[{}]: {}", sender_name, response);
                 println!();
 
+                // Chat transcript: include pre-turn research in the same worker line (ledger still has full dialogue_input).
+                let message_for_chat = if research_injection.is_empty() {
+                    response.clone()
+                } else {
+                    format!(
+                        "{}\n\n---\nResearch (used for this turn)\n{}",
+                        response, research_injection
+                    )
+                };
+
                 // Agent line to chat before sidecars so chat order matches dialogue flow.
                 if let Err(e) = crate::http_client::send_conversation_message(
                     &endpoint,
@@ -617,7 +701,7 @@ pub async fn start_conversation_loop(
                     receiver_id,
                     &receiver_name,
                     &effective_topic,
-                    &response,
+                    &message_for_chat,
                     run_context.as_ref(),
                     ledger.as_ref(),
                 )
@@ -714,5 +798,49 @@ pub async fn start_conversation_loop(
         if let Some(ref l) = ledger {
             let _ = l.try_finalize_run_stopped("conversation_loops_finished");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DEFAULT_RESEARCH_INJECTION_PLACEMENT, ResearchInjectionPlacement, apply_research_injection,
+    };
+
+    #[test]
+    fn apply_research_injection_empty_is_noop() {
+        let (e, c) = apply_research_injection(
+            DEFAULT_RESEARCH_INJECTION_PLACEMENT,
+            "sys".into(),
+            "ctx".into(),
+            "",
+        );
+        assert_eq!(e, "sys");
+        assert_eq!(c, "ctx");
+    }
+
+    #[test]
+    fn apply_research_injection_appends_to_context_by_default() {
+        let (e, c) = apply_research_injection(
+            ResearchInjectionPlacement::ConversationContext,
+            "sys".into(),
+            "ctx".into(),
+            "refs",
+        );
+        assert_eq!(e, "sys");
+        assert!(c.contains("refs"));
+        assert!(c.contains("Research references"));
+    }
+
+    #[test]
+    fn apply_research_injection_can_target_enhanced_instruction() {
+        let (e, c) = apply_research_injection(
+            ResearchInjectionPlacement::EnhancedInstruction,
+            "sys".into(),
+            "ctx".into(),
+            "refs",
+        );
+        assert!(e.contains("refs"));
+        assert_eq!(c, "ctx");
     }
 }

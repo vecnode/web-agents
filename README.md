@@ -27,7 +27,7 @@ cargo build --release
 - Agents are rows: **Manager**, **Worker**, **Evaluator**, **Researcher**, plus **Topic** presets.
 - Rows wire via dropdowns (e.g. worker→manager/topic).
 - **Start** saves a manifest and runs Ollama loops; workers with a topic are **paired in id order** (two workers ⇒ dialogue, one ⇒ solo loop).
-- Evaluators/researchers are **sidecars** on each turn when active; **Stop** ends all loops.
+- **Evaluators**: post-line sidecar on each utterance when active. **Researchers**: pre-turn only (injection + HTTP) for the worker selected under Injection—no second post-line researcher pass. **Stop** ends all loops.
 
 ### Communication
 
