@@ -8,6 +8,9 @@ use tokio::runtime::Handle;
 
 mod nodes_panel;
 mod settings_panel;
+
+use crate::vault::MasterVault;
+
 pub struct AMSAgents {
     rt_handle: Handle,
     ollama_models: Arc<Mutex<Vec<String>>>,
@@ -97,10 +100,8 @@ impl AMSAgents {
             nodes_panel: nodes_panel::NodesPanelState::default(),
         }
     }
-}
 
-impl eframe::App for AMSAgents {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    pub(crate) fn prepare_shell(&mut self, ctx: &egui::Context) {
         if !self.theme_applied {
             catppuccin_egui::set_theme(ctx, catppuccin_egui::LATTE);
             self.theme_applied = true;
@@ -111,6 +112,12 @@ impl eframe::App for AMSAgents {
             ctx.set_fonts(fonts);
             self.phosphor_fonts_installed = true;
         }
+    }
+}
+
+impl eframe::App for AMSAgents {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.prepare_shell(ctx);
         // Auto-refresh model list on startup
         if self.ollama_models.lock().unwrap().is_empty()
             && !*self.ollama_models_loading.lock().unwrap()
@@ -145,12 +152,14 @@ impl eframe::App for AMSAgents {
 }
 
 pub struct AMSAgentsApp {
+    vault: MasterVault,
     ams_agents: AMSAgents,
 }
 
 impl AMSAgentsApp {
     pub fn new(rt_handle: Handle) -> Self {
         Self {
+            vault: MasterVault::new(),
             ams_agents: AMSAgents::new(rt_handle),
         }
     }
@@ -158,6 +167,26 @@ impl AMSAgentsApp {
 
 impl eframe::App for AMSAgentsApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.ams_agents.prepare_shell(ctx);
+
+        if !self.vault.is_unlocked() {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(40.0);
+                    self.vault.show_unlock_ui(ui);
+                });
+            });
+            return;
+        }
+
+        egui::TopBottomPanel::top("master_vault_lock_bar")
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin::same(6)))
+            .show(ctx, |ui| {
+                if self.vault.show_lock_bar(ui) {
+                    self.vault.lock();
+                }
+            });
+
         eframe::App::update(&mut self.ams_agents, ctx, frame);
     }
 }

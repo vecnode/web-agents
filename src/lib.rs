@@ -5,5 +5,6 @@ pub mod app;
 pub mod event_ledger;
 pub mod http_client;
 pub mod reproducibility;
+pub mod vault;
 
 pub use app::{AMSAgents, AMSAgentsApp};
