@@ -1,4 +1,5 @@
 use super::AMSAgents;
+use crate::event_ledger::EventLedger;
 use crate::reproducibility::{
     APP_NAME, GraphSnapshot, MANIFEST_VERSION, ManifestEdge, ManifestNode, RunContext, RunManifest,
     RunRuntimeSettings, canonical_graph_signature, derive_experiment_id, export_manifest_to,
@@ -1180,6 +1181,7 @@ fn build_conversation_sidecar_from_agents(
         match &r.data.payload {
             NodePayload::Evaluator(e) if e.active => {
                 evaluators.push(SidecarEvaluator {
+                    global_id: e.global_id.clone(),
                     instruction: e.instruction.clone(),
                     analysis_mode: e.analysis_mode.clone(),
                     limit_token: e.limit_token,
@@ -1188,6 +1190,7 @@ fn build_conversation_sidecar_from_agents(
             }
             NodePayload::Researcher(res) if res.active => {
                 researchers.push(SidecarResearcher {
+                    global_id: res.global_id.clone(),
                     topic_mode: res.topic_mode.clone(),
                     instruction: res.instruction.clone(),
                     limit_token: res.limit_token,
@@ -1638,12 +1641,32 @@ impl AMSAgents {
         Ok(())
     }
 
+    /// Writes `manifest.json`, `events.jsonl`, and `summary.json` from the current run into a zip.
+    pub(super) fn download_run_bundle_to_path(&mut self, zip_path: PathBuf) -> anyhow::Result<()> {
+        let ctx = self.current_run_context.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "no active run context; start the graph or load a manifest with a run id"
+            )
+        })?;
+        let run_dir =
+            crate::reproducibility::run_dir(&runs_root(), &ctx.experiment_id, &ctx.run_id);
+        if !run_dir.is_dir() {
+            anyhow::bail!("run directory not found: {}", run_dir.display());
+        }
+        crate::event_ledger::write_run_bundle_zip(&run_dir, &zip_path)?;
+        self.manifest_status_message = format!("Run bundle written: {}", zip_path.display());
+        Ok(())
+    }
+
     fn stop_graph(&mut self) {
         self.ollama_run_epoch.fetch_add(1, Ordering::SeqCst);
         for (_, flag, _) in &self.conversation_loop_handles {
             *flag.lock().unwrap() = false;
         }
         self.conversation_loop_handles.clear();
+        if let Some(ledger) = self.event_ledger.take() {
+            let _ = ledger.try_finalize_run_stopped("graph_stopped");
+        }
         self.conversation_graph_running
             .store(false, Ordering::Release);
         *self.last_message_in_chat.lock().unwrap() = None;
@@ -1693,10 +1716,35 @@ impl AMSAgents {
                     return false;
                 }
             };
-        if let Err(e) = self.persist_active_manifest(manifest) {
-            self.manifest_status_message = format!("Manifest save failed: {e}");
-            eprintln!("[Run Graph] Manifest save failed: {e}");
-            return false;
+        let manifest_path = match self.persist_active_manifest(manifest) {
+            Ok(p) => p,
+            Err(e) => {
+                self.manifest_status_message = format!("Manifest save failed: {e}");
+                eprintln!("[Run Graph] Manifest save failed: {e}");
+                return false;
+            }
+        };
+
+        if let Some(ctx) = self.current_run_context.as_ref() {
+            let run_dir = manifest_path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| runs_root().join(&ctx.experiment_id).join(&ctx.run_id));
+            match EventLedger::open(run_dir, ctx.experiment_id.clone(), ctx.run_id.clone()) {
+                Ok(ledger) => {
+                    let arc = Arc::new(ledger);
+                    if let Err(e) = arc.append_system_run_started(&manifest_path) {
+                        self.manifest_status_message = format!("Ledger start failed: {e}");
+                        eprintln!("[Run Graph] Ledger start failed: {e}");
+                    } else {
+                        self.event_ledger = Some(arc);
+                    }
+                }
+                Err(e) => {
+                    self.manifest_status_message = format!("Ledger open failed: {e}");
+                    eprintln!("[Run Graph] Ledger open failed: {e}");
+                }
+            }
         }
 
         sync_evaluator_researcher_activity(&mut self.nodes_panel.agents);
@@ -1739,6 +1787,9 @@ impl AMSAgents {
             match serde_json::to_string_pretty(&play_plan) {
                 Ok(json) => println!("[Run Graph] play plan:\n{}", json),
                 Err(e) => eprintln!("[Run Graph] failed to serialize play plan: {e}"),
+            }
+            if let Some(ref l) = self.event_ledger {
+                let _ = l.try_finalize_run_stopped("no_eligible_conversation_workers");
             }
             return true;
         }
@@ -1928,6 +1979,34 @@ impl AMSAgents {
         let ollama_caught = self.ollama_run_epoch.load(Ordering::SeqCst);
         let ollama_stop_epoch = Some((ollama_epoch, ollama_caught));
 
+        let agent_a_global_id = self
+            .nodes_panel
+            .agents
+            .iter()
+            .find(|r| r.id == agent_a_id)
+            .and_then(|r| {
+                if let NodePayload::Worker(w) = &r.data.payload {
+                    Some(w.global_id.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+        let agent_b_global_id = self
+            .nodes_panel
+            .agents
+            .iter()
+            .find(|r| r.id == agent_b_id)
+            .and_then(|r| {
+                if let NodePayload::Worker(w) = &r.data.payload {
+                    Some(w.global_id.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+        let ledger = self.event_ledger.clone();
+
         let loop_handle = handle.spawn(async move {
             crate::agent_conversation_loop::start_conversation_loop(
                 message_event_source_id,
@@ -1938,11 +2017,13 @@ impl AMSAgents {
                 agent_a_instruction,
                 agent_a_topic,
                 agent_a_topic_source,
+                agent_a_global_id,
                 agent_b_id,
                 agent_b_name,
                 agent_b_instruction,
                 agent_b_topic,
                 agent_b_topic_source,
+                agent_b_global_id,
                 ollama_host,
                 endpoint,
                 flag_clone,
@@ -1956,6 +2037,7 @@ impl AMSAgents {
                 run_generation_counter,
                 loops_remaining_in_run,
                 conversation_graph_running_flag,
+                ledger,
             )
             .await;
         });
@@ -2347,7 +2429,10 @@ impl AMSAgents {
                         };
                         let epoch_arc = self.ollama_run_epoch.clone();
                         let epoch_caught = self.ollama_run_epoch.load(Ordering::SeqCst);
+                        let ledger = self.event_ledger.clone();
+                        let eval_global_id = e.global_id.clone();
                         handle.spawn(async move {
+                            let ollama_in = format!("{}\n{}", instruction, message);
                             match crate::adk_integration::send_to_ollama(
                                 ollama_host.as_str(),
                                 &instruction,
@@ -2360,6 +2445,16 @@ impl AMSAgents {
                             .await
                             {
                                 Ok(response) => {
+                                    if let Some(ref l) = ledger {
+                                        let _ = l.append_with_hashes(
+                                            "sidecar.evaluator",
+                                            Some(eval_global_id.clone()),
+                                            selected_model.clone(),
+                                            &ollama_in,
+                                            &response,
+                                            serde_json::json!({ "analysis_mode": analysis_mode }),
+                                        );
+                                    }
                                     let response_lower = response.to_lowercase();
                                     let sentiment = match analysis_mode.as_str() {
                                         "Topic Extraction" => "topic",
@@ -2399,6 +2494,7 @@ impl AMSAgents {
                                                 sentiment,
                                                 &response,
                                                 run_context.as_ref(),
+                                                ledger.as_ref(),
                                             )
                                             .await
                                         {
@@ -2412,6 +2508,20 @@ impl AMSAgents {
                                 Err(e) => {
                                     if e.to_string() != crate::adk_integration::OLLAMA_STOPPED_MSG
                                     {
+                                        if let Some(ref l) = ledger {
+                                            let _ = l.append_with_hashes(
+                                                "sidecar.evaluator",
+                                                Some(eval_global_id.clone()),
+                                                selected_model.clone(),
+                                                &ollama_in,
+                                                "",
+                                                serde_json::json!({
+                                                    "analysis_mode": analysis_mode,
+                                                    "stage": "ollama",
+                                                    "error": e.to_string(),
+                                                }),
+                                            );
+                                        }
                                         eprintln!("[Evaluator] Ollama error: {}", e);
                                     }
                                 }
@@ -2472,7 +2582,10 @@ impl AMSAgents {
                         };
                         let epoch_arc = self.ollama_run_epoch.clone();
                         let epoch_caught = self.ollama_run_epoch.load(Ordering::SeqCst);
+                        let ledger = self.event_ledger.clone();
+                        let res_global_id = r.global_id.clone();
                         handle.spawn(async move {
+                            let ollama_in = format!("{}\n{}", instruction, message);
                             match crate::adk_integration::send_to_ollama(
                                 ollama_host.as_str(),
                                 &instruction,
@@ -2485,6 +2598,16 @@ impl AMSAgents {
                             .await
                             {
                                 Ok(response) => {
+                                    if let Some(ref l) = ledger {
+                                        let _ = l.append_with_hashes(
+                                            "sidecar.researcher",
+                                            Some(res_global_id.clone()),
+                                            selected_model.clone(),
+                                            &ollama_in,
+                                            &response,
+                                            serde_json::json!({ "topic": topic }),
+                                        );
+                                    }
                                     if has_output_nodes {
                                         if let Err(e) =
                                             crate::http_client::send_researcher_result(
@@ -2493,6 +2616,7 @@ impl AMSAgents {
                                                 &topic,
                                                 &response,
                                                 run_context.as_ref(),
+                                                ledger.as_ref(),
                                             )
                                             .await
                                         {
@@ -2507,6 +2631,20 @@ impl AMSAgents {
                                     if e.to_string()
                                         != crate::adk_integration::OLLAMA_STOPPED_MSG
                                     {
+                                        if let Some(ref l) = ledger {
+                                            let _ = l.append_with_hashes(
+                                                "sidecar.researcher",
+                                                Some(res_global_id.clone()),
+                                                selected_model.clone(),
+                                                &ollama_in,
+                                                "",
+                                                serde_json::json!({
+                                                    "topic": topic,
+                                                    "stage": "ollama",
+                                                    "error": e.to_string(),
+                                                }),
+                                            );
+                                        }
                                         eprintln!("[Researcher] Ollama error: {}", e);
                                     }
                                 }

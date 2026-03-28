@@ -1,4 +1,5 @@
 use crate::agent_entities::{Agent, AgentManager, Evaluator, Researcher};
+use crate::event_ledger::EventLedger;
 use crate::reproducibility::{RunContext, RunManifest};
 use eframe::egui;
 use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -40,6 +41,10 @@ pub struct AMSAgents {
     manifest_import_path: String,
     /// JSON path for Agents tab Load / Save (graph + runtime).
     agents_workspace_path: String,
+    /// Target path for "Download Run Bundle" (zip).
+    pub(super) bundle_export_path: String,
+    /// Append-only ledger for the active run (`events.jsonl`), if any.
+    pub(super) event_ledger: Option<Arc<EventLedger>>,
     manifest_status_message: String,
     read_only_replay_mode: bool,
     /// True while a started play is active (cleared on Stop or when all conversation tasks finish).
@@ -87,6 +92,8 @@ impl AMSAgents {
             manifest_export_path: "runs/exported-manifest.json".to_string(),
             manifest_import_path: "runs/import-manifest.json".to_string(),
             agents_workspace_path: "runs/agents-workspace.json".to_string(),
+            bundle_export_path: "runs/run-bundle.zip".to_string(),
+            event_ledger: None,
             manifest_status_message: String::new(),
             read_only_replay_mode: false,
             conversation_graph_running: Arc::new(AtomicBool::new(false)),

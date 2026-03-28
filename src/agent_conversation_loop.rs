@@ -1,4 +1,5 @@
 use crate::adk_integration::OllamaStopEpoch;
+use crate::event_ledger::EventLedger;
 use crate::http_client::{send_evaluator_result, send_researcher_result};
 use crate::reproducibility::RunContext;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -15,6 +16,7 @@ pub struct ConversationSidecarConfig {
 
 #[derive(Clone)]
 pub struct SidecarEvaluator {
+    pub global_id: String,
     pub instruction: String,
     pub analysis_mode: String,
     pub limit_token: bool,
@@ -23,6 +25,7 @@ pub struct SidecarEvaluator {
 
 #[derive(Clone)]
 pub struct SidecarResearcher {
+    pub global_id: String,
     pub topic_mode: String,
     pub instruction: String,
     pub limit_token: bool,
@@ -71,8 +74,10 @@ pub async fn run_sidecars_for_message(
     selected_model: Option<&str>,
     ollama_stop_epoch: Option<OllamaStopEpoch>,
     post_http: bool,
+    ledger: Option<&Arc<EventLedger>>,
 ) -> Result<(), ()> {
     for ev in &sidecars.evaluators {
+        let ollama_input = format!("{}\n{}", ev.instruction, agent_message);
         match crate::adk_integration::send_to_ollama(
             ollama_host,
             &ev.instruction,
@@ -85,6 +90,16 @@ pub async fn run_sidecars_for_message(
         .await
         {
             Ok(response) => {
+                if let Some(l) = ledger {
+                    let _ = l.append_with_hashes(
+                        "sidecar.evaluator",
+                        Some(ev.global_id.clone()),
+                        selected_model.map(|s| s.to_string()),
+                        &ollama_input,
+                        &response,
+                        serde_json::json!({ "analysis_mode": ev.analysis_mode }),
+                    );
+                }
                 let sentiment = evaluator_sentiment(ev.analysis_mode.as_str(), &response);
                 if post_http {
                     if let Err(e) = send_evaluator_result(
@@ -93,6 +108,7 @@ pub async fn run_sidecars_for_message(
                         sentiment,
                         &response,
                         run_context,
+                        ledger,
                     )
                     .await
                     {
@@ -103,6 +119,20 @@ pub async fn run_sidecars_for_message(
             Err(e) => {
                 if e.to_string() == crate::adk_integration::OLLAMA_STOPPED_MSG {
                     return Err(());
+                }
+                if let Some(l) = ledger {
+                    let _ = l.append_with_hashes(
+                        "sidecar.evaluator",
+                        Some(ev.global_id.clone()),
+                        selected_model.map(|s| s.to_string()),
+                        &ollama_input,
+                        "",
+                        serde_json::json!({
+                            "analysis_mode": ev.analysis_mode,
+                            "stage": "ollama",
+                            "error": e.to_string(),
+                        }),
+                    );
                 }
                 eprintln!("[Evaluator] Ollama error: {}", e);
             }
@@ -120,6 +150,7 @@ pub async fn run_sidecars_for_message(
             rs.instruction,
             topic.to_lowercase()
         );
+        let ollama_input = format!("{}\n{}", instruction, agent_message);
         match crate::adk_integration::send_to_ollama(
             ollama_host,
             &instruction,
@@ -132,6 +163,16 @@ pub async fn run_sidecars_for_message(
         .await
         {
             Ok(response) => {
+                if let Some(l) = ledger {
+                    let _ = l.append_with_hashes(
+                        "sidecar.researcher",
+                        Some(rs.global_id.clone()),
+                        selected_model.map(|s| s.to_string()),
+                        &ollama_input,
+                        &response,
+                        serde_json::json!({ "topic": topic }),
+                    );
+                }
                 if post_http {
                     if let Err(e) = send_researcher_result(
                         endpoint,
@@ -139,6 +180,7 @@ pub async fn run_sidecars_for_message(
                         &topic,
                         &response,
                         run_context,
+                        ledger,
                     )
                     .await
                     {
@@ -149,6 +191,20 @@ pub async fn run_sidecars_for_message(
             Err(e) => {
                 if e.to_string() == crate::adk_integration::OLLAMA_STOPPED_MSG {
                     return Err(());
+                }
+                if let Some(l) = ledger {
+                    let _ = l.append_with_hashes(
+                        "sidecar.researcher",
+                        Some(rs.global_id.clone()),
+                        selected_model.map(|s| s.to_string()),
+                        &ollama_input,
+                        "",
+                        serde_json::json!({
+                            "topic": topic,
+                            "stage": "ollama",
+                            "error": e.to_string(),
+                        }),
+                    );
                 }
                 eprintln!("[Researcher] Ollama error: {}", e);
             }
@@ -235,11 +291,13 @@ pub async fn start_conversation_loop(
     agent_a_instruction: String,
     agent_a_topic: String,
     agent_a_topic_source: String,
+    agent_a_global_id: String,
     agent_b_id: usize,
     agent_b_name: String,
     agent_b_instruction: String,
     agent_b_topic: String,
     agent_b_topic_source: String,
+    agent_b_global_id: String,
     ollama_host: String,
     endpoint: String,
     active_flag: Arc<Mutex<bool>>,
@@ -253,6 +311,7 @@ pub async fn start_conversation_loop(
     run_generation_counter: Arc<AtomicU64>,
     loops_remaining_in_run: Arc<AtomicUsize>,
     conversation_graph_running: Arc<AtomicBool>,
+    ledger: Option<Arc<EventLedger>>,
 ) {
     let mut turn = 0;
     let mut is_agent_a_turn = true;
@@ -274,6 +333,17 @@ pub async fn start_conversation_loop(
     );
     println!("\n{}", start_message);
 
+    if let Some(ref l) = ledger {
+        let _ = l.append_with_hashes(
+            "dialogue.start",
+            None,
+            selected_model.clone(),
+            "",
+            &start_message,
+            serde_json::json!({ "topics_summary": topics_summary }),
+        );
+    }
+
     // Send to chat app (await so later lines follow this in order).
     if let Err(e) = crate::http_client::send_conversation_message(
         &endpoint,
@@ -284,6 +354,7 @@ pub async fn start_conversation_loop(
         &topics_summary,
         &start_message,
         run_context.as_ref(),
+        ledger.as_ref(),
     )
     .await
     {
@@ -355,11 +426,11 @@ pub async fn start_conversation_loop(
         let turn_message = format!("Turn {}: {} -> {}", turn + 1, sender_name, receiver_name);
         println!("{}", turn_message);
 
-        // Send turn message to chat app
         let endpoint_clone = endpoint.clone();
         let topic_clone = effective_topic.clone();
         let turn_message_clone = turn_message.clone();
         let run_context_for_turn = run_context.clone();
+        let ledger_turn = ledger.clone();
         tokio::spawn(async move {
             if let Err(e) = crate::http_client::send_conversation_message(
                 &endpoint_clone,
@@ -370,6 +441,7 @@ pub async fn start_conversation_loop(
                 &topic_clone,
                 &turn_message_clone,
                 run_context_for_turn.as_ref(),
+                ledger_turn.as_ref(),
             )
             .await
             {
@@ -378,6 +450,7 @@ pub async fn start_conversation_loop(
         });
 
         // Send message to Ollama
+        let dialogue_input = format!("{}\n---\n{}", enhanced_instruction, conversation_context);
         match crate::adk_integration::send_to_ollama_with_context(
             ollama_host.as_str(),
             &enhanced_instruction,
@@ -390,6 +463,24 @@ pub async fn start_conversation_loop(
         .await
         {
             Ok(response) => {
+                let sender_gid = if sender_id == agent_a_id {
+                    agent_a_global_id.clone()
+                } else {
+                    agent_b_global_id.clone()
+                };
+                if let Some(ref l) = ledger {
+                    let _ = l.append_with_hashes(
+                        "dialogue.turn",
+                        Some(sender_gid),
+                        selected_model.clone(),
+                        &dialogue_input,
+                        &response,
+                        serde_json::json!({
+                            "turn": turn,
+                            "receiver_name": receiver_name,
+                        }),
+                    );
+                }
                 // Add to history
                 history.add_message(sender_id, sender_name.clone(), response.clone(), turn);
                 // Include a monotonic turn marker so downstream nodes can react
@@ -414,6 +505,7 @@ pub async fn start_conversation_loop(
                     &effective_topic,
                     &response,
                     run_context.as_ref(),
+                    ledger.as_ref(),
                 )
                 .await
                 {
@@ -430,6 +522,7 @@ pub async fn start_conversation_loop(
                     selected_model.as_deref(),
                     ollama_stop_epoch.clone(),
                     true,
+                    ledger.as_ref(),
                 )
                 .await
                 .is_err()
@@ -444,6 +537,16 @@ pub async fn start_conversation_loop(
             Err(e) => {
                 if e.to_string() == crate::adk_integration::OLLAMA_STOPPED_MSG {
                     break;
+                }
+                if let Some(ref l) = ledger {
+                    let _ = l.append_with_hashes(
+                        "dialogue.ollama_error",
+                        None,
+                        selected_model.clone(),
+                        &dialogue_input,
+                        "",
+                        serde_json::json!({ "error": e.to_string(), "turn": turn }),
+                    );
                 }
                 eprintln!("[Error] Ollama error in conversation loop: {}", e);
                 break;
@@ -468,6 +571,17 @@ pub async fn start_conversation_loop(
     );
     println!("\n{}", end_message);
 
+    if let Some(ref l) = ledger {
+        let _ = l.append_with_hashes(
+            "dialogue.end",
+            None,
+            selected_model.clone(),
+            "",
+            &end_message,
+            serde_json::json!({ "total_turns": turn }),
+        );
+    }
+
     // End line after all turns and their sidecars; await so nothing is still in flight here.
     if let Err(e) = crate::http_client::send_conversation_message(
         &endpoint,
@@ -478,6 +592,7 @@ pub async fn start_conversation_loop(
         &topics_summary,
         &end_message,
         run_context.as_ref(),
+        ledger.as_ref(),
     )
     .await
     {
@@ -487,5 +602,8 @@ pub async fn start_conversation_loop(
     let prev_remaining = loops_remaining_in_run.fetch_sub(1, Ordering::SeqCst);
     if prev_remaining == 1 && run_generation_counter.load(Ordering::SeqCst) == run_generation {
         conversation_graph_running.store(false, Ordering::Release);
+        if let Some(ref l) = ledger {
+            let _ = l.try_finalize_run_stopped("conversation_loops_finished");
+        }
     }
 }
