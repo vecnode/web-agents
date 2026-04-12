@@ -1,13 +1,19 @@
-//! Writes a PHC Argon2 hash to `runs/.master_hash` (same params as `MasterVault` verification).
+//! Writes a PHC Argon2id hash to `runs/.master_hash` using secure defaults.
 
-use argon2::Argon2;
-use argon2::password_hash::{PasswordHasher, SaltString, rand_core::OsRng};
+use ams_agents::vault::{VaultKdfParams, hash_master_password_phc};
 use std::io::Write;
 use std::path::Path;
 
 fn main() -> std::io::Result<()> {
     let path = Path::new("runs").join(".master_hash");
-    println!("This writes a one-line Argon2 hash to {}.", path.display());
+    let params = VaultKdfParams::from_env();
+    println!(
+        "This writes a one-line Argon2id hash to {} (m={} KiB, t={}, p={}).",
+        path.display(),
+        params.memory_cost_kib,
+        params.time_cost,
+        params.parallelism,
+    );
     if path.exists() {
         eprint!("File already exists. Overwrite? [y/N]: ");
         std::io::stderr().flush()?;
@@ -28,11 +34,8 @@ fn main() -> std::io::Result<()> {
         std::process::exit(1);
     }
 
-    let salt = SaltString::generate(&mut OsRng);
-    let phc = Argon2::default()
-        .hash_password(pw.as_bytes(), &salt)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
-        .to_string();
+    let phc = hash_master_password_phc(&pw, params)
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
