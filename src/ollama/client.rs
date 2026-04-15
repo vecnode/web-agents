@@ -45,7 +45,7 @@ pub(crate) struct RunnerContext {
 pub(crate) async fn fetch_models(ollama_host: &str) -> Result<Vec<String>> {
     let url = std::env::var("OLLAMA_TAGS_URL")
         .unwrap_or_else(|_| format!("{}/api/tags", normalize_ollama_host(ollama_host)));
-    crate::http_policy::guard_ollama_request(&url)?;
+    crate::web::guard_ollama_request(&url)?;
     let client = reqwest::Client::new();
     let response = client.get(url).send().await?.error_for_status()?;
     let tags = response.json::<OllamaTagsResponse>().await?;
@@ -64,7 +64,7 @@ pub(crate) async fn build_runner_context(
 ) -> Result<RunnerContext> {
     let model_name = resolve_model_name(model_override);
     let host = normalize_ollama_host(ollama_host);
-    crate::http_policy::guard_ollama_request(&host)?;
+    crate::web::guard_ollama_request(&host)?;
     let mut config = OllamaConfig::with_host(host, &model_name);
     if limit_token {
         if let Ok(num) = num_predict.parse::<u32>() {

@@ -4,8 +4,8 @@
 //! and inject references into the speaking worker's prompt before inference.
 
 use crate::run::event_ledger::EventLedger;
-use crate::http_client::{send_evaluator_result, send_researcher_result};
 use crate::run::manifest::RunContext;
+use crate::web::{send_evaluator_result, send_researcher_result};
 use crate::ollama::OllamaStopEpoch;
 use futures_util::future::join_all;
 use std::sync::Arc;

@@ -1,6 +1,6 @@
 use crate::run::event_ledger::EventLedger;
-use crate::http_policy::HttpPolicy;
 use crate::run::manifest::{RunContext, RunManifest};
+use crate::web::HttpPolicy;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Handle;
@@ -47,8 +47,8 @@ pub struct AMSAgents {
 
 impl AMSAgents {
     pub fn new(rt_handle: Handle) -> Self {
-        let http_policy = crate::http_policy::HttpPolicy::from_env();
-        crate::http_policy::set_policy(http_policy);
+        let http_policy = crate::web::HttpPolicy::from_env();
+        crate::web::set_policy(http_policy);
 
         Self {
             rt_handle,
@@ -85,7 +85,7 @@ impl AMSAgents {
     }
 
     pub(crate) fn sync_http_policy(&self) {
-        crate::http_policy::set_policy(HttpPolicy {
+        crate::web::set_policy(HttpPolicy {
             air_gap_enabled: self.air_gap_enabled,
             allow_local_ollama: self.allow_local_ollama,
         });

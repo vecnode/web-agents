@@ -138,7 +138,7 @@ pub async fn start_conversation_loop(
         );
     }
 
-    if let Err(e) = crate::http_client::send_conversation_message(
+    if let Err(e) = crate::web::send_conversation_message(
         &endpoint,
         0,
         "Agent Manager",
@@ -258,7 +258,7 @@ pub async fn start_conversation_loop(
         let run_context_for_turn = run_context.clone();
         let ledger_turn = ledger.clone();
         tokio::spawn(async move {
-            if let Err(e) = crate::http_client::send_conversation_message(
+            if let Err(e) = crate::web::send_conversation_message(
                 &endpoint_clone,
                 0,
                 "Agent Manager",
@@ -325,7 +325,7 @@ pub async fn start_conversation_loop(
                     )
                 };
 
-                if let Err(e) = crate::http_client::send_conversation_message(
+                if let Err(e) = crate::web::send_conversation_message(
                     &endpoint,
                     sender_id,
                     &sender_name,
@@ -403,7 +403,7 @@ pub async fn start_conversation_loop(
         );
     }
 
-    if let Err(e) = crate::http_client::send_conversation_message(
+    if let Err(e) = crate::web::send_conversation_message(
         &endpoint,
         0,
         "Agent Manager",

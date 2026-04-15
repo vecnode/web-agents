@@ -500,7 +500,7 @@ impl AMSAgents {
                                     };
                                     if has_output_nodes {
                                         if let Err(e) =
-                                            crate::http_client::send_evaluator_result(
+                                            crate::web::send_evaluator_result(
                                                 &endpoint,
                                                 "Agent Evaluator",
                                                 sentiment,
@@ -622,7 +622,7 @@ impl AMSAgents {
                                     }
                                     if has_output_nodes {
                                         if let Err(e) =
-                                            crate::http_client::send_researcher_result(
+                                            crate::web::send_researcher_result(
                                                 &endpoint,
                                                 "Agent Researcher",
                                                 &topic,
