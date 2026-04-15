@@ -56,6 +56,9 @@ pub async fn send_to_ollama(
                 ttft_ms: None,
                 input_chars: input.chars().count(),
                 output_chars: 0,
+                prompt_token_count: None,
+                candidates_token_count: None,
+                total_token_count: None,
             });
             return Err(anyhow::anyhow!(OLLAMA_STOPPED_MSG));
         }
@@ -90,6 +93,9 @@ pub async fn send_to_ollama(
                 ttft_ms: None,
                 input_chars: input.chars().count(),
                 output_chars: 0,
+                prompt_token_count: None,
+                candidates_token_count: None,
+                total_token_count: None,
             });
             return Err(e);
         }
@@ -106,6 +112,7 @@ pub async fn send_to_ollama(
                 .map(format_rfc3339);
             let ttft_ms = streaming.ttft.map(|d| d.as_millis());
             let output_chars = streaming.response.chars().count();
+            let token_usage = streaming.usage.clone();
             metrics_sink.emit_inference(InferenceTimingEvent {
                 event_type: "inference_timing".to_string(),
                 timestamp: now_rfc3339_utc(),
@@ -123,6 +130,11 @@ pub async fn send_to_ollama(
                 ttft_ms,
                 input_chars: input.chars().count(),
                 output_chars,
+                prompt_token_count: token_usage.as_ref().map(|u| u.prompt_token_count),
+                candidates_token_count: token_usage
+                    .as_ref()
+                    .map(|u| u.candidates_token_count),
+                total_token_count: token_usage.as_ref().map(|u| u.total_token_count),
             });
             Ok(streaming.response)
         }
@@ -145,6 +157,9 @@ pub async fn send_to_ollama(
                 ttft_ms: None,
                 input_chars: input.chars().count(),
                 output_chars: 0,
+                prompt_token_count: None,
+                candidates_token_count: None,
+                total_token_count: None,
             });
             Err(e)
         }
@@ -193,6 +208,12 @@ pub async fn test_ollama(
                 ttft_ms: streaming.ttft.map(|d| d.as_millis()),
                 input_chars: input.chars().count(),
                 output_chars: streaming.response.chars().count(),
+                prompt_token_count: streaming.usage.as_ref().map(|u| u.prompt_token_count),
+                candidates_token_count: streaming
+                    .usage
+                    .as_ref()
+                    .map(|u| u.candidates_token_count),
+                total_token_count: streaming.usage.as_ref().map(|u| u.total_token_count),
             });
             Ok(streaming.response)
         }
@@ -215,6 +236,9 @@ pub async fn test_ollama(
                 ttft_ms: None,
                 input_chars: input.chars().count(),
                 output_chars: 0,
+                prompt_token_count: None,
+                candidates_token_count: None,
+                total_token_count: None,
             });
             Err(e)
         }

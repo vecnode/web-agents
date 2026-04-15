@@ -86,6 +86,12 @@ pub struct InferenceTimingEvent {
     pub ttft_ms: Option<u128>,
     pub input_chars: usize,
     pub output_chars: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_token_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidates_token_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_token_count: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -213,6 +219,9 @@ mod tests {
             ttft_ms: Some(250),
             input_chars: 12,
             output_chars: 24,
+            prompt_token_count: Some(10),
+            candidates_token_count: Some(20),
+            total_token_count: Some(30),
         });
 
         let raw = fs::read_to_string(path).expect("read metrics file");
