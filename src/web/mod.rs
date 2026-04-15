@@ -2,6 +2,7 @@ use crate::run::event_ledger::EventLedger;
 use crate::run::manifest::RunContext;
 use anyhow::{Result, anyhow};
 use rocket::figment::Figment;
+use rocket::response::content::RawHtml;
 use rocket::serde::json::Json;
 use rocket::{Build, Config, Rocket, routes};
 use reqwest::Url;
@@ -508,7 +509,77 @@ struct HealthResponse {
 
 #[derive(Serialize)]
 struct OutgoingHttpLogResponse {
-    lines: Vec<String>,
+    total: usize,
+    entries: Vec<OutgoingHttpLogEntry>,
+}
+
+#[derive(Serialize)]
+struct OutgoingHttpLogEntry {
+    index: usize,
+    raw: String,
+    action: String,
+    endpoint: String,
+    component: String,
+    sender: Option<String>,
+    receiver: Option<String>,
+    message: String,
+    blocked: bool,
+}
+
+fn parse_outgoing_http_log_line(index: usize, raw: String) -> OutgoingHttpLogEntry {
+    let parts: Vec<&str> = raw.split(" | ").collect();
+
+    let (action, endpoint) = if let Some(first) = parts.first() {
+        let mut it = first.splitn(2, ' ');
+        (
+            it.next().unwrap_or_default().to_string(),
+            it.next().unwrap_or_default().to_string(),
+        )
+    } else {
+        (String::new(), String::new())
+    };
+
+    let component = parts.get(1).copied().unwrap_or_default().to_string();
+    let mut sender = None;
+    let mut receiver = None;
+    let message = if parts.len() >= 4 {
+        let participants = parts[2];
+        if let Some((s, r)) = participants.split_once(" -> ") {
+            sender = Some(s.trim().to_string());
+            receiver = Some(r.trim().to_string());
+        }
+        parts[3..].join(" | ")
+    } else if parts.len() >= 3 {
+        parts[2..].join(" | ")
+    } else {
+        String::new()
+    };
+
+    let blocked = action.eq_ignore_ascii_case("BLOCKED");
+
+    OutgoingHttpLogEntry {
+        index,
+        raw,
+        action,
+        endpoint,
+        component,
+        sender,
+        receiver,
+        message,
+        blocked,
+    }
+}
+
+fn build_outgoing_http_log_response() -> OutgoingHttpLogResponse {
+    let lines = get_outgoing_http_log_lines();
+    let total = lines.len();
+    let entries = lines
+        .into_iter()
+        .enumerate()
+        .map(|(index, raw)| parse_outgoing_http_log_line(index, raw))
+        .collect();
+
+    OutgoingHttpLogResponse { total, entries }
 }
 
 #[rocket::get("/health")]
@@ -521,9 +592,134 @@ fn health() -> Json<HealthResponse> {
 
 #[rocket::get("/outgoing-http-log")]
 fn outgoing_http_log_route() -> Json<OutgoingHttpLogResponse> {
-    Json(OutgoingHttpLogResponse {
-        lines: get_outgoing_http_log_lines(),
-    })
+        Json(build_outgoing_http_log_response())
+}
+
+#[rocket::get("/outgoing-http-log/live")]
+fn outgoing_http_log_live_route() -> RawHtml<String> {
+        RawHtml(
+                r#"<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Outgoing HTTP Log</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --panel: #111827;
+            --text: #e5e7eb;
+            --muted: #9ca3af;
+            --ok: #34d399;
+            --blocked: #f87171;
+            --border: #374151;
+        }
+        body {
+            margin: 0;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            background: radial-gradient(circle at top, #1f2937, var(--bg));
+            color: var(--text);
+        }
+        .wrap {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .meta {
+            color: var(--muted);
+            margin-bottom: 12px;
+        }
+        details {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin: 8px 0;
+            padding: 8px;
+        }
+        summary {
+            cursor: pointer;
+            list-style: none;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .badge {
+            padding: 2px 6px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            font-size: 12px;
+        }
+        .badge.ok { color: var(--ok); }
+        .badge.blocked { color: var(--blocked); }
+        pre {
+            margin: 8px 0 0;
+            white-space: pre-wrap;
+            word-break: break-word;
+            color: var(--muted);
+        }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <h1>Outgoing HTTP Log</h1>
+        <div class="meta" id="meta">Loading...</div>
+        <div id="entries"></div>
+    </div>
+    <script>
+        const meta = document.getElementById('meta');
+        const entriesEl = document.getElementById('entries');
+
+        function entrySummary(entry) {
+            const who = entry.sender && entry.receiver
+                ? `${entry.sender} -> ${entry.receiver}`
+                : entry.component;
+            return `#${entry.index} ${entry.action} ${who}`;
+        }
+
+        function render(data) {
+            const now = new Date().toLocaleTimeString();
+            meta.textContent = `Entries: ${data.total} | Auto-updates every 1s | Last update: ${now}`;
+
+            const html = data.entries
+                .slice()
+                .reverse()
+                .map((entry) => {
+                    const badgeClass = entry.blocked ? 'blocked' : 'ok';
+                    const payload = JSON.stringify(entry, null, 2);
+                    return `
+                        <details>
+                            <summary>
+                                <span class="badge ${badgeClass}">${entry.action}</span>
+                                <span>${entrySummary(entry)}</span>
+                            </summary>
+                            <pre>${payload}</pre>
+                        </details>
+                    `;
+                })
+                .join('');
+
+            entriesEl.innerHTML = html;
+        }
+
+        async function refresh() {
+            try {
+                const res = await fetch('/api/outgoing-http-log', { cache: 'no-store' });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                render(data);
+            } catch (err) {
+                meta.textContent = `Failed to load: ${err}`;
+            }
+        }
+
+        refresh();
+        setInterval(refresh, 1000);
+    </script>
+</body>
+</html>"#
+                        .to_string(),
+        )
 }
 
 fn build_rocket(config: &WebConfig) -> Rocket<Build> {
@@ -531,7 +727,10 @@ fn build_rocket(config: &WebConfig) -> Rocket<Build> {
         .merge(("address", config.address.clone()))
         .merge(("port", config.port));
 
-    rocket::custom(figment).mount("/api", routes![health, outgoing_http_log_route])
+    rocket::custom(figment).mount(
+        "/api",
+        routes![health, outgoing_http_log_route, outgoing_http_log_live_route],
+    )
 }
 
 pub fn start_embedded_server_if_enabled(rt_handle: &Handle) -> bool {
@@ -551,7 +750,7 @@ pub fn start_embedded_server_if_enabled(rt_handle: &Handle) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_bool_env;
+    use super::{parse_bool_env, parse_outgoing_http_log_line};
 
     #[test]
     fn parse_bool_env_honors_default_when_unset() {
@@ -575,5 +774,34 @@ mod tests {
         unsafe { std::env::set_var(key, "off") };
         assert!(!parse_bool_env(key, true));
         unsafe { std::env::remove_var(key) };
+    }
+
+    #[test]
+    fn parse_outgoing_http_conversation_line() {
+        let entry = parse_outgoing_http_log_line(
+            3,
+            "POST http://localhost:3000/ | conversation | Agent A -> Agent B | hello".to_string(),
+        );
+        assert_eq!(entry.index, 3);
+        assert_eq!(entry.action, "POST");
+        assert_eq!(entry.endpoint, "http://localhost:3000/");
+        assert_eq!(entry.component, "conversation");
+        assert_eq!(entry.sender.as_deref(), Some("Agent A"));
+        assert_eq!(entry.receiver.as_deref(), Some("Agent B"));
+        assert_eq!(entry.message, "hello");
+        assert!(!entry.blocked);
+    }
+
+    #[test]
+    fn parse_outgoing_http_blocked_line() {
+        let entry = parse_outgoing_http_log_line(
+            1,
+            "BLOCKED http://example.com | evaluator Agent Evaluator [topic] | denied"
+                .to_string(),
+        );
+        assert_eq!(entry.action, "BLOCKED");
+        assert!(entry.blocked);
+        assert_eq!(entry.component, "evaluator Agent Evaluator [topic]");
+        assert_eq!(entry.message, "denied");
     }
 }
