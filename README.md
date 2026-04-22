@@ -2,20 +2,17 @@
 
 Agents Research Platform for HCI and Cognitive Sciences (Dashboard).
 
-
-### Overview
-
 - Multi-agent conversations
-- Prompt design and injection
+- Interactive prompt design
 - Reproducibility of inference
 - Local and field-first architecture
 
 
-### Main Dependencies
+
+### Dependencies
 
 
-- rust-adk 
-    - (adk-agent, adk-model, adk-runner, adk-session, adk-core)
+- rust-adk
 - eframe
 - egui-phosphor
 
@@ -24,10 +21,10 @@ Agents Research Platform for HCI and Cognitive Sciences (Dashboard).
 
 ```sh
 # One-time vault: interactive prompt writes `runs/.master_hash` (PHC Argon2id hash for the password gate)
+# Ubuntu 22
 cargo run --bin gen_master_hash
-# For Windows 11 on a separate target/ dir
-# $env:CARGO_TARGET_DIR="target-hash-win11"; cargo run --bin gen_master_hash
-
+# Windows 11
+$env:CARGO_TARGET_DIR="target-hash-win11"; cargo run --bin gen_master_hash
 
 # Development: run the application (`target/debug/`)
 cargo run
@@ -41,19 +38,21 @@ AMS_WEB_ENABLED=true cargo run
 cargo build --release
 ```
 
+### Reproducibility
 
-### Communication and Security
+- The `./runs/` folder is the application persisted state and run history:
+    1) a workspace snapshot you can load/save outside a run,
+    2) per-experiment/per-run execution artifacts
+
+
+
+### Security
 
 - Vault: master password verification uses Argon2id.
 - Vault key derivation + encryption: vault payload keys are derived separately from the master password (`Argon2id + HKDF-SHA256`) and encrypted with AEAD (`ChaCha20-Poly1305`) using random salt/nonce and versioned metadata.
 - Outbound HTTP: JSON bodies are `POST`ed to `CONVERSATION_HTTP_ENDPOINT` (default `http://localhost:3000/`) unless air-gap mode is enabled.
 - Air-gap mode: set `AMS_AIR_GAP=1` to block non-loopback outbound HTTP.
 
-### Reproducibility
-
-- The `./runs/` folder is the application persisted state and run history:
-    1) a workspace snapshot you can load/save outside a run,
-    2) per-experiment/per-run execution artifacts
 
 
 ### Timing and Metrics
@@ -81,7 +80,7 @@ Sample JSONL records:
 
 ### Python Runtimes
 
-You can create and manage isolated Python virtual environments per experiment via the **Python** tab.
+You can create and manage isolated Python virtual environments per experiment via the Python tab.
 
 - Create a venv from any system interpreter, install packages into it, and destroy it when done.
 - Each runtime is stored under `runtimes/python/{id}/` and tracked in `python_runtimes.json`.
