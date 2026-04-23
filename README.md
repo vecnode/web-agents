@@ -12,9 +12,17 @@ Agents Research Platform for HCI and Cognitive Sciences (Dashboard).
 
 ### Dependencies
 
-- rust-adk
 - eframe
+- egui
+- catppuccin-egui
 - egui-phosphor
+- tokio
+- adk-agent
+- adk-model
+- adk-runner
+- reqwest
+- rocket
+- serde
 
 
 ### Building

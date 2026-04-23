@@ -136,8 +136,7 @@ impl AMSAgents {
                         rt.python_version.clone(),
                         rt.root_path
                             .as_ref()
-                            .map(|p| p.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "—".to_string()),
+                            .map_or_else(|| "—".to_string(), |p| p.to_string_lossy().to_string()),
                         format!("{:?}", rt.state),
                         rt.clone(),
                     )
@@ -210,10 +209,10 @@ impl AMSAgents {
                                 self.rt_handle.spawn_blocking(move || {
                                     let result =
                                         install_packages_in_runtime(&rt, &packages)
-                                            .map(|out| {
-                                                format!("Install complete.\n{}", out.trim())
-                                            })
-                                            .unwrap_or_else(|e| format!("Error: {e}"));
+                                            .map_or_else(
+                                                |e| format!("Error: {e}"),
+                                                |out| format!("Install complete.\n{}", out.trim()),
+                                            );
                                     *bg_msg.lock().unwrap() = Some(result);
                                 });
                             }
@@ -249,7 +248,7 @@ impl AMSAgents {
                                 match outcome {
                                     Ok(()) => bg_destroyed.store(true, Ordering::Relaxed),
                                     Err(e) => {
-                                        *bg_msg.lock().unwrap() = Some(format!("Error: {e}"))
+                                        *bg_msg.lock().unwrap() = Some(format!("Error: {e}"));
                                     }
                                 }
                             });

@@ -311,11 +311,10 @@ impl AMSAgents {
                     .load(Ordering::Acquire)
                 {
                     // Backward-compatible fallback if queue is empty but latest still has a message.
-                    if pending_events.is_empty() {
-                        if let Some(last_msg) = self.last_message_in_chat.lock().unwrap().clone()
-                        {
-                            pending_events.push(last_msg);
-                        }
+                    if pending_events.is_empty()
+                        && let Some(last_msg) = self.last_message_in_chat.lock().unwrap().clone()
+                    {
+                        pending_events.push(last_msg);
                     }
                     // HTTP POST for evaluator/researcher results (no separate output node type).
                     let has_output_nodes = true;
@@ -444,7 +443,7 @@ impl AMSAgents {
                         let app_state = self.app_state.clone();
                         let eval_global_id = e.global_id.clone();
                         handle.spawn(async move {
-                            let ollama_in = format!("{}\n{}", instruction, message);
+                            let ollama_in = format!("{instruction}\n{message}");
                             match crate::ollama::send_to_ollama(
                                 ollama_host.as_str(),
                                 &instruction,
@@ -483,15 +482,12 @@ impl AMSAgents {
                                         "Sentiment Classification" => {
                                             if response_lower.contains("positive")
                                                 || response_lower.contains("happy")
-                                            {
-                                                "sentiment"
-                                            } else if response_lower.contains("negative")
+                                                || response_lower.contains("negative")
                                                 || response_lower.contains("sad")
                                                 || response_lower.contains("angry")
                                                 || response_lower.contains("frustrated")
+                                                || response_lower.contains("neutral")
                                             {
-                                                "sentiment"
-                                            } else if response_lower.contains("neutral") {
                                                 "sentiment"
                                             } else {
                                                 "unknown"
@@ -507,8 +503,8 @@ impl AMSAgents {
                                             }
                                         }
                                     };
-                                    if has_output_nodes {
-                                        if let Err(e) =
+                                    if has_output_nodes
+                                        && let Err(e) =
                                             crate::web::send_evaluator_result(
                                                 &endpoint,
                                                 "Agent Evaluator",
@@ -518,12 +514,8 @@ impl AMSAgents {
                                                 ledger.as_ref(),
                                             )
                                             .await
-                                        {
-                                            eprintln!(
-                                                "[Evaluator] Failed to send to ams-chat: {}",
-                                                e
-                                            );
-                                        }
+                                    {
+                                        eprintln!("[Evaluator] Failed to send to ams-chat: {e}");
                                     }
                                 }
                                 Err(e) => {
@@ -543,7 +535,7 @@ impl AMSAgents {
                                                 }),
                                             );
                                         }
-                                        eprintln!("[Evaluator] Ollama error: {}", e);
+                                        eprintln!("[Evaluator] Ollama error: {e}");
                                     }
                                 }
                             }
@@ -606,7 +598,7 @@ impl AMSAgents {
                         let app_state = self.app_state.clone();
                         let res_global_id = r.global_id.clone();
                         handle.spawn(async move {
-                            let ollama_in = format!("{}\n{}", instruction, message);
+                            let ollama_in = format!("{instruction}\n{message}");
                             match crate::ollama::send_to_ollama(
                                 ollama_host.as_str(),
                                 &instruction,
@@ -638,8 +630,8 @@ impl AMSAgents {
                                             serde_json::json!({ "topic": topic }),
                                         );
                                     }
-                                    if has_output_nodes {
-                                        if let Err(e) =
+                                    if has_output_nodes
+                                        && let Err(e) =
                                             crate::web::send_researcher_result(
                                                 &endpoint,
                                                 "Agent Researcher",
@@ -649,12 +641,8 @@ impl AMSAgents {
                                                 ledger.as_ref(),
                                             )
                                             .await
-                                        {
-                                            eprintln!(
-                                                "[Researcher] Failed to send to ams-chat: {}",
-                                                e
-                                            );
-                                        }
+                                    {
+                                        eprintln!("[Researcher] Failed to send to ams-chat: {e}");
                                     }
                                 }
                                 Err(e) => {
@@ -675,7 +663,7 @@ impl AMSAgents {
                                                 }),
                                             );
                                         }
-                                        eprintln!("[Researcher] Ollama error: {}", e);
+                                        eprintln!("[Researcher] Ollama error: {e}");
                                     }
                                 }
                             }
