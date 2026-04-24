@@ -1,8 +1,10 @@
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
+
 use eframe::egui;
 use egui_phosphor::regular;
+// Removed egui_inbox due to version conflict. Use Vec<String> for inbox messages.
 
 use crate::agents::AMSAgents;
 use crate::agents::nodes_panel::{
@@ -105,35 +107,114 @@ impl AMSAgents {
                     ui.separator();
 
                     if self.nodes_panel.active_tab == PanelTab::Overview {
+
+
+                        // Overview panel with left bar and right chat area
+
                         // Parent frame occupying available height
+                        
+
+                        
                         egui::Frame::default()
                             .fill(ui.visuals().panel_fill)
                             .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
                             .show(ui, |ui| {
                                 ui.allocate_ui_with_layout(
+
+                                    
                                     egui::vec2(ui.available_width(), ui.available_height()),
                                     egui::Layout::left_to_right(egui::Align::Min),
                                     |ui| {
-                                        // Left bar
-                                        egui::Frame::default()
-                                            .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
-                                            .show(ui, |ui| {
-                                                ui.set_width(140.0);
-                                                ui.set_height(ui.available_height());
-                                                ui.vertical_centered(|ui| {
+
+                                        ui.add_space(4.0);
+
+
+                                        // Left bar with true top margin
+
+                                        ui.vertical(|ui| {
+                                            ui.add_space(4.0); // true top margin for the left bar frame
+                                            egui::Frame::default()
+                                                .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
+                                                .inner_margin(egui::Margin::same(0))
+                                                .show(ui, |ui| {
+                                                    ui.set_width(140.0);
+                                                    ui.set_height(ui.available_height() - 4.0); // subtract the top margin
                                                     ui.label("Left bar");
                                                 });
+                                        });
+
+                                        // Right area with inbox from ui_state
+
+                                        ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                                            
+                                            ui.add_space(6.0); // Do not remove
+
+                                            // Input row, separator, and button always at the bottom
+                                            ui.horizontal(|ui| {
+                                                let input = &mut ui_state.inbox_input;
+                                                let text_edit = egui::TextEdit::singleline(input).hint_text("Type a message...");
+                                                let response = ui.add(text_edit);
+                                                let send_clicked = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                                    || ui.button("Send").clicked();
+                                                if send_clicked && !input.trim().is_empty() {
+                                                    let timestamp = chrono::Local::now().format("%H:%M:%S").to_string();
+                                                    ui_state.inbox_messages.push((timestamp, input.trim().to_string()));
+                                                    input.clear();
+                                                }
                                             });
-                                        // Right area
-                                        egui::Frame::default()
-                                            .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
-                                            .show(ui, |ui| {
-                                                ui.set_width(ui.available_width());
-                                                ui.set_height(ui.available_height());
-                                                ui.vertical_centered(|ui| {
-                                                    ui.label("Right area");
+                                            
+                                            ui.separator();
+
+
+                                            // Chat frame with scroll area fills the rest
+                                            let scroll_height = ui.available_height() - 6.0;
+                                            
+                                            egui::Frame::default()
+                                                .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
+                                                .inner_margin(egui::Margin::same(0))
+                                                .show(ui, |ui| {
+                                                    ui.set_width(ui.available_width() - 4.0); // subtract horizontal padding
+                                                    ui.set_height(scroll_height.max(40.0));
+                                                    egui::Frame::none()
+                                                        .inner_margin(egui::Margin::same(4))
+                                                        .show(ui, |ui| {
+                                                            egui::ScrollArea::vertical()
+                                                                .stick_to_bottom(true)
+                                                                .show(ui, |ui| {
+                                                                    ui.vertical(|ui| {
+                                                                        ui.set_width(ui.available_width());
+                                                                        let len = ui_state.inbox_messages.len();
+                                                                        for (i, (timestamp, msg)) in ui_state.inbox_messages.iter().enumerate() {
+                                                                            ui.horizontal(|ui| {
+                                                                                // Timestamp bubble
+                                                                                egui::Frame::new()
+                                                                                    .fill(ui.visuals().widgets.inactive.bg_fill)
+                                                                                    .stroke(egui::Stroke::new(0.5, ui.visuals().widgets.noninteractive.bg_stroke.color))
+                                                                                    .corner_radius(egui::CornerRadius::same(6))
+                                                                                    .inner_margin(egui::Margin::symmetric(6, 2))
+                                                                                    .show(ui, |ui| {
+                                                                                        ui.label(timestamp);
+                                                                                    });
+                                                                                // Message bubble
+                                                                                egui::Frame::new()
+                                                                                    .fill(ui.visuals().extreme_bg_color)
+                                                                                    .stroke(egui::Stroke::new(0.5, ui.visuals().widgets.noninteractive.bg_stroke.color))
+                                                                                    .corner_radius(egui::CornerRadius::same(6))
+                                                                                    .inner_margin(egui::Margin::symmetric(8, 4))
+                                                                                    .show(ui, |ui| {
+                                                                                        ui.label(msg);
+                                                                                    });
+                                                                            });
+                                                                            // Only add space if not the last message
+                                                                            if i + 1 < len {
+                                                                                ui.add_space(4.0);
+                                                                            }
+                                                                        }
+                                                                    });
+                                                                });
+                                                        });
                                                 });
-                                            });
+                                        });
                                     },
                                 );
                             });
@@ -173,35 +254,7 @@ impl AMSAgents {
                                     );
                                 }
                             });
-                        if ui
-                            .add_enabled(!self.read_only_replay_mode, egui::Button::new("Add"))
-                            .clicked()
-                        {
-                            let mut node = match self.nodes_panel.selected_add_kind {
-                                AgentNodeKind::Manager => NodeData::new_manager(),
-                                AgentNodeKind::Worker => NodeData::new_worker(),
-                                AgentNodeKind::Evaluator => NodeData::new_evaluator(),
-                                AgentNodeKind::Researcher => NodeData::new_researcher(),
-                                AgentNodeKind::Topic => NodeData::new_topic(),
-                            };
-                            node.set_name(BasicNodeViewer::numbered_name_for_kind(
-                                &self.nodes_panel.agents,
-                                self.nodes_panel.selected_add_kind,
-                            ));
-                            self.nodes_panel
-                                .push_agent(egui::pos2(0.0, 0.0), node);
-                        }
-                        if self.read_only_replay_mode {
-                            ui.add_space(8.0);
-                            ui.label(egui::RichText::new("Replay mode (read-only)").weak());
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("File:");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut ui_state.agents_workspace_path)
-                                .desired_width(280.0),
-                        );
+
                         if ui.button("Load").clicked() {
                             let path = PathBuf::from(ui_state.agents_workspace_path.trim());
                             match self.load_agents_workspace_from_path(path) {
@@ -222,6 +275,7 @@ impl AMSAgents {
                                 }
                             }
                         }
+
                         let (start_stop_label, start_stop_hover) =
                             if self
                                 .conversation_graph_running

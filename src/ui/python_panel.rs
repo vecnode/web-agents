@@ -19,7 +19,7 @@ impl AMSAgents {
         ui_state: &mut AMSAgentsUiState,
     ) {
         let panel = &mut ui_state.python;
-        // ── Poll results from background tasks ───────────────────────────
+
         if let Some(result) = panel.bg_new_runtime.lock().unwrap().take() {
             match result {
                 Ok(rt) => {
