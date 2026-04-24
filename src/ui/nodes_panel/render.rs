@@ -55,7 +55,7 @@ impl AMSAgents {
                         if ui
                             .selectable_label(
                                 self.nodes_panel.active_tab == PanelTab::Agents,
-                                "Agents",
+                                "Workspace",
                             )
                             .clicked()
                         {
@@ -153,9 +153,10 @@ impl AMSAgents {
                         return;
                     }
 
+                    ui.label(egui::RichText::new("Workspace").strong().size(16.0));
+                    ui.separator();
+
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Agents").strong().size(12.0));
-                        ui.add_space(8.0);
                         egui::ComboBox::from_id_salt("add_agent_kind")
                             .selected_text(self.nodes_panel.selected_add_kind.label())
                             .show_ui(ui, |ui| {
