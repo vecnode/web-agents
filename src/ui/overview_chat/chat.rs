@@ -77,17 +77,18 @@ impl ChatExample {
 
 		pub fn add_room(&mut self, name: String, store: &mut super::store::Store) {
 			if let Ok(id) = store.create_conversation() {
+				// Persist name
+				let _ = store.rename_conversation(&id, &name);
 				self.rooms.push(Room::new(id.clone(), name));
 				self.selected_room = Some(id);
 			}
 		}
 
 		pub fn rename_room(&mut self, id: &str, new_name: String, store: &mut super::store::Store) {
-			// For now, just update the local name; in a real app, persist to DB
 			if let Some(room) = self.rooms.iter_mut().find(|r| r.id == id) {
 				room.name = new_name.clone();
 			}
-			// TODO: persist name to DB if schema supports it
+			let _ = store.rename_conversation(id, &new_name);
 		}
 
 		pub fn sidebar_ui(&mut self, ui: &mut Ui) {
@@ -97,6 +98,7 @@ impl ChatExample {
 			let mut new_room_name = String::new();
 			let mut rename_id: Option<String> = None;
 			let mut rename_text = String::new();
+			let mut store = super::store::Store::open("metrics/overview_chat.sqlite").unwrap();
 			egui::SidePanel::left("rooms_sidebar")
 				.resizable(false)
 				.min_width(sidebar_width)
@@ -110,12 +112,7 @@ impl ChatExample {
 						ui.label("New:");
 						let resp = ui.text_edit_singleline(&mut new_room_name);
 						if ui.button("+").clicked() && !new_room_name.trim().is_empty() {
-							// Use a callback to add room (store must be passed in real app)
-							// Placeholder: self.add_room(new_room_name.clone(), store)
-							// For now, just add locally
-							let id = format!("room_{}", self.rooms.len() + 1);
-							self.rooms.push(Room::new(id.clone(), new_room_name.clone()));
-							self.selected_room = Some(id);
+							self.add_room(new_room_name.clone(), &mut store);
 							new_room_name.clear();
 						}
 					});
@@ -136,7 +133,7 @@ impl ChatExample {
 						if editing {
 							let mut text = rename_text.clone();
 							if ui.text_edit_singleline(&mut text).lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-								self.rename_room(&room.id, text.clone(), &mut super::store::Store::open("metrics/overview_chat.sqlite").unwrap());
+								self.rename_room(&room.id, text.clone(), &mut store);
 								rename_id = None;
 							}
 						}

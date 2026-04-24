@@ -127,8 +127,8 @@ impl Store {
         let now = audit::now_rfc3339();
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            r#"INSERT INTO conversations (id, created_at, updated_at)
-               VALUES (?1, ?2, ?3)"#,
+            r#"INSERT INTO conversations (id, name, created_at, updated_at)
+               VALUES (?1, '', ?2, ?3)"#,
             params![&id, &now, &now],
         )?;
         Ok(id)
@@ -206,19 +206,25 @@ impl Store {
     pub fn list_conversations(&self, limit: usize) -> Result<Vec<ConversationSummary>, StoreError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, updated_at FROM conversations ORDER BY updated_at DESC LIMIT ?1",
+            "SELECT id, name, updated_at FROM conversations ORDER BY updated_at DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit as i64], |r| {
-            Ok(ConversationSummary {
-                id: r.get(0)?,
-                updated_at: r.get(1)?,
-            })
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            out.push(row?);
+            let (id, name, updated_at) = row?;
+            out.push((id, name, updated_at));
         }
         Ok(out)
+        pub fn rename_conversation(&self, id: &str, new_name: &str) -> Result<(), StoreError> {
+            let conn = self.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE conversations SET name = ?2, updated_at = ?3 WHERE id = ?1",
+                params![id, new_name, audit::now_rfc3339()],
+            )?;
+            Ok(())
+        }
     }
 
     pub fn append_message(&self, conversation_id: &str, msg: &ChatMessage, display_ts: &str) -> Result<(), StoreError> {
