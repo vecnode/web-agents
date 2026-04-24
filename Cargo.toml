@@ -6,6 +6,7 @@ edition = "2024"
 default-run = "ams-agents"
 
 [dependencies]
+egui_inbox = "0.2"
 
 eframe = "0.33"
 egui = "0.33"

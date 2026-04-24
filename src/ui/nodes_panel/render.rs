@@ -1,8 +1,10 @@
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
+
 use eframe::egui;
 use egui_phosphor::regular;
+use egui_inbox::{Inbox, Message};
 
 use crate::agents::AMSAgents;
 use crate::agents::nodes_panel::{
@@ -124,15 +126,17 @@ impl AMSAgents {
                                                     ui.label("Left bar");
                                                 });
                                             });
-                                        // Right area
+                                        // Right area with inbox
                                         egui::Frame::default()
                                             .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
                                             .show(ui, |ui| {
                                                 ui.set_width(ui.available_width());
                                                 ui.set_height(ui.available_height());
-                                                ui.vertical_centered(|ui| {
-                                                    ui.label("Right area");
-                                                });
+                                                // Example inbox
+                                                let mut inbox = Inbox::default();
+                                                inbox.push(Message::new("Welcome to your inbox!"));
+                                                inbox.push(Message::new("This is a test message."));
+                                                egui_inbox::inbox_ui(ui, &mut inbox);
                                             });
                                     },
                                 );
