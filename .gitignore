@@ -10,6 +10,9 @@ agents-workspace.json
 
 timings.jsonl
 
-exp_*/
 
-*.sqlite
+overview_chat_audit.jsonl
+overview_chat.sqlite
+
+
+exp_*/
