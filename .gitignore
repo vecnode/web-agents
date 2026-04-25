@@ -11,3 +11,5 @@ agents-workspace.json
 timings.jsonl
 
 exp_*/
+
+*.sqlite

@@ -218,13 +218,13 @@ impl NodeData {
         }
     }
 
-    pub(crate) fn set_name(&mut self, name: String) {
-        match &mut self.payload {
-            NodePayload::Manager(m) => m.name = name,
-            NodePayload::Worker(w) => w.name = name,
-            NodePayload::Evaluator(e) => e.name = name,
-            NodePayload::Researcher(r) => r.name = name,
-            NodePayload::Topic(t) => t.name = name,
-        }
-    }
+    // pub(crate) fn set_name(&mut self, name: String) {
+    //     match &mut self.payload {
+    //         NodePayload::Manager(m) => m.name = name,
+    //         NodePayload::Worker(w) => w.name = name,
+    //         NodePayload::Evaluator(e) => e.name = name,
+    //         NodePayload::Researcher(r) => r.name = name,
+    //         NodePayload::Topic(t) => t.name = name,
+    //     }
+    // }
 }

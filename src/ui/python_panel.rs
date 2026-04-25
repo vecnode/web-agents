@@ -53,7 +53,7 @@ impl AMSAgents {
         egui::ScrollArea::vertical().show(ui, |ui| {
 
             if panel.active_runtime.is_none() {
-                ui.label(egui::RichText::new("Python Environment").strong());
+                ui.label(egui::RichText::new("Python Environment").strong().size(16.0));
                 ui.separator();
                 ui.add_space(4.0);
 

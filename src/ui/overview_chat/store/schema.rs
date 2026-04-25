@@ -37,5 +37,72 @@ pub fn create_tables(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
         "#,
     )?;
+
+    // Existing user databases may have an earlier conversations schema.
+    // Backfill columns expected by current code so runtime inserts/updates do not fail.
+    ensure_conversations_columns(conn)?;
+
+    Ok(())
+}
+
+fn ensure_conversations_columns(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    ensure_column(conn, "conversations", "name", "TEXT NOT NULL DEFAULT ''")?;
+    ensure_column(
+        conn,
+        "conversations",
+        "selected_model",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        conn,
+        "conversations",
+        "chat_token_limit",
+        "INTEGER NOT NULL DEFAULT 70",
+    )?;
+    ensure_column(
+        conn,
+        "conversations",
+        "chat_token_limit_enabled",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        conn,
+        "conversations",
+        "ollama_token_limit",
+        "INTEGER NOT NULL DEFAULT 70",
+    )?;
+    ensure_column(
+        conn,
+        "conversations",
+        "ollama_token_limit_enabled",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    Ok(())
+}
+
+fn ensure_column(
+    conn: &rusqlite::Connection,
+    table: &str,
+    column: &str,
+    column_def: &str,
+) -> rusqlite::Result<()> {
+    let pragma = format!("PRAGMA table_info({table})");
+    let mut stmt = conn.prepare(&pragma)?;
+    let mut rows = stmt.query([])?;
+    let mut exists = false;
+
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == column {
+            exists = true;
+            break;
+        }
+    }
+
+    if !exists {
+        let alter = format!("ALTER TABLE {table} ADD COLUMN {column} {column_def}");
+        conn.execute(&alter, [])?;
+    }
+
     Ok(())
 }

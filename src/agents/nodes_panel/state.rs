@@ -41,17 +41,17 @@ impl Default for NodesPanelState {
 }
 
 impl NodesPanelState {
-    pub(crate) fn push_agent(&mut self, pos: egui::Pos2, data: NodeData) -> usize {
-        let id = self.next_agent_id;
-        self.next_agent_id += 1;
-        self.agents.push(AgentRecord {
-            id,
-            position: pos,
-            open: true,
-            data,
-        });
-        id
-    }
+    // pub(crate) fn push_agent(&mut self, pos: egui::Pos2, data: NodeData) -> usize {
+    //     let id = self.next_agent_id;
+    //     self.next_agent_id += 1;
+    //     self.agents.push(AgentRecord {
+    //         id,
+    //         position: pos,
+    //         open: true,
+    //         data,
+    //     });
+    //     id
+    // }
 
     pub(crate) fn insert_agent_with_id(
         &mut self,

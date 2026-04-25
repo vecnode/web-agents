@@ -109,28 +109,51 @@ impl AMSAgents {
                     
 
                     if self.nodes_panel.active_tab == PanelTab::Overview {
-                        use crate::ui::overview_chat::{chat::{ChatExample, Room}, store::Store};
-                        use std::sync::Mutex;
+                        use crate::ui::overview_chat::chat::{ChatExample, ChatMessage, Room};
+                        use crate::ui::overview_chat::incoming::MessageSource;
+                        use crate::ui::overview_chat::store::Store;
                         use std::path::PathBuf;
+                        use std::sync::{Mutex, OnceLock};
                         // Static path for demonstration; in real app, make this configurable
                         let db_path = PathBuf::from("metrics/overview_chat.sqlite");
-                        let store = Store::open(db_path).expect("Failed to open chat store");
+                        let store = match Store::open(db_path) {
+                            Ok(s) => s,
+                            Err(err) => {
+                                ui.colored_label(
+                                    ui.visuals().error_fg_color,
+                                    format!("Overview chat store error: {err}"),
+                                );
+                                return;
+                            }
+                        };
 
                         // List rooms (conversations)
                         let convs = store.list_conversations(50).unwrap_or_default();
                         let mut rooms: Vec<Room> = convs.iter().map(|c| Room::new(c.id.clone(), format!("Room {}", &c.id[..8]))).collect();
                         if rooms.is_empty() {
                             // Always have at least one room
-                            let id = store.create_conversation().unwrap();
+                            let id = match store.create_conversation() {
+                                Ok(id) => id,
+                                Err(err) => {
+                                    ui.colored_label(
+                                        ui.visuals().error_fg_color,
+                                        format!("Failed to create conversation: {err}"),
+                                    );
+                                    return;
+                                }
+                            };
                             rooms.push(Room::new(id.clone(), format!("Room {}", &id[..8])));
                         }
 
                         // Static ChatExample for demonstration; in real app, store in ui_state
-                        static mut CHAT: Option<Mutex<ChatExample>> = None;
-                        let chat = unsafe {
-                            CHAT.get_or_insert_with(|| Mutex::new(ChatExample::new()))
-                        };
+                        static CHAT: OnceLock<Mutex<ChatExample>> = OnceLock::new();
+                        let chat = CHAT.get_or_init(|| Mutex::new(ChatExample::new()));
                         let mut chat = chat.lock().unwrap();
+                        for item in chat.inbox.drain() {
+                            let ts = ChatExample::display_time_for_message(&item);
+                            chat.message_timestamps.push(ts);
+                            chat.messages.push(item);
+                        }
                         chat.set_rooms(rooms.clone());
                         if chat.selected_room.is_none() {
                             chat.selected_room = Some(rooms[0].id.clone());
@@ -141,85 +164,146 @@ impl AMSAgents {
                             chat.hydrate(msgs, ts);
                         }
 
-                        ui.horizontal(|ui| {
+                        let split_height = ui.available_height() - 20.0; // Account for room selector and spacing
+                        egui::Frame::default()
+                            .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
+                            .inner_margin(egui::Margin::same(6))
+                            .show(ui, |ui| {
+                            ui.set_min_height(split_height);
+                            ui.set_height(split_height);
+                            ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                            let left_rect_width = 140.0;
+                            let row_height = ui.available_height();
+                            let right_rect_width =
+                                (ui.available_width() - left_rect_width - ui.spacing().item_spacing.x)
+                                    .max(0.0);
+
+                            // THE WIDGETS AND SO ON SHOULD BE INSIDE THIS LEFT RECT
+
                             // Left bar: chat room sidebar
-                            ui.vertical(|ui| {
-                                chat.sidebar_ui(ui);
-                            });
-                            // Right: message bubbles area (unchanged)
-                            ui.vertical(|ui| {
-                                // Copy the original message bubbles area here
-                                let scroll_height = ui.available_height() - 6.0;
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(left_rect_width, row_height),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    egui::Frame::default()
+                                        .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
+                                        .inner_margin(egui::Margin::same(0))
+                                        .show(ui, |ui| {
+                                            chat.sidebar_ui(ui);
+                                        });
+                                },
+                            );
+
+                            
+                            // Right: message bubbles area
+                            ui.allocate_ui_with_layout(
+
+                                egui::vec2(right_rect_width, row_height),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                ui.set_min_height(row_height);
+                                ui.set_height(row_height);
                                 egui::Frame::default()
                                     .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
                                     .inner_margin(egui::Margin::same(0))
                                     .show(ui, |ui| {
-                                        ui.set_width(ui.available_width() - 4.0); // subtract horizontal padding
-                                        ui.set_height(scroll_height.max(40.0));
+                                        ui.set_min_height(row_height - 60.0); // Account for input row
+                                        ui.set_height(row_height - 60.0); // Account for input row
+                                        ui.set_width((ui.available_width() - 4.0).max(0.0));
                                         egui::Frame::new()
                                             .inner_margin(egui::Margin::same(4))
                                             .show(ui, |ui| {
-                                                egui::ScrollArea::vertical()
-                                                    .stick_to_bottom(true)
-                                                    .show(ui, |ui| {
-                                                        ui.vertical(|ui| {
-                                                            ui.set_width(ui.available_width());
-                                                            let len = chat.messages.len();
-                                                            for (i, msg) in chat.messages.iter().enumerate() {
-                                                                ui.horizontal(|ui| {
-                                                                    // Timestamp bubble
-                                                                    egui::Frame::new()
-                                                                        .fill(ui.visuals().widgets.inactive.bg_fill)
-                                                                        .stroke(egui::Stroke::new(0.5, ui.visuals().widgets.noninteractive.bg_stroke.color))
-                                                                        .corner_radius(egui::CornerRadius::same(6))
-                                                                        .inner_margin(egui::Margin::symmetric(6, 2))
-                                                                        .show(ui, |ui| {
-                                                                            let ts = ChatExample::display_time_for_message(msg);
-                                                                            ui.label(ts);
+                                                let input_row_height = 28.0;
+                                                let bottom_gap = 6.0;
+                                                let messages_height =
+                                                    (ui.available_height() - input_row_height - bottom_gap)
+                                                        .max(0.0);
+                                                ui.allocate_ui_with_layout(
+                                                    egui::vec2(ui.available_width(), messages_height),
+                                                    egui::Layout::top_down(egui::Align::Min),
+                                                    |ui| {
+                                                        ui.set_min_height(messages_height);
+                                                        egui::ScrollArea::vertical()
+                                                            .stick_to_bottom(true)
+                                                            .show(ui, |ui| {
+                                                                ui.vertical(|ui| {
+                                                                    ui.set_width(ui.available_width());
+                                                                    let len = chat.messages.len();
+                                                                    for (i, msg) in chat.messages.iter().enumerate() {
+                                                                        ui.horizontal(|ui| {
+                                                                            // Timestamp bubble
+                                                                            egui::Frame::new()
+                                                                                .fill(ui.visuals().widgets.inactive.bg_fill)
+                                                                                .stroke(egui::Stroke::new(0.5, ui.visuals().widgets.noninteractive.bg_stroke.color))
+                                                                                .corner_radius(egui::CornerRadius::same(6))
+                                                                                .inner_margin(egui::Margin::symmetric(6, 2))
+                                                                                .show(ui, |ui| {
+                                                                                    let ts = chat
+                                                                                        .message_timestamps
+                                                                                        .get(i)
+                                                                                        .cloned()
+                                                                                        .unwrap_or_else(|| "--:--:--".to_string());
+                                                                                    ui.label(ts);
+                                                                                });
+                                                                            // Message bubble
+                                                                            egui::Frame::new()
+                                                                                .fill(ui.visuals().extreme_bg_color)
+                                                                                .stroke(egui::Stroke::new(0.5, ui.visuals().widgets.noninteractive.bg_stroke.color))
+                                                                                .corner_radius(egui::CornerRadius::same(6))
+                                                                                .inner_margin(egui::Margin::symmetric(8, 4))
+                                                                                .show(ui, |ui| {
+                                                                                    ui.label(&msg.content);
+                                                                                });
                                                                         });
-                                                                    // Message bubble
-                                                                    egui::Frame::new()
-                                                                        .fill(ui.visuals().extreme_bg_color)
-                                                                        .stroke(egui::Stroke::new(0.5, ui.visuals().widgets.noninteractive.bg_stroke.color))
-                                                                        .corner_radius(egui::CornerRadius::same(6))
-                                                                        .inner_margin(egui::Margin::symmetric(8, 4))
-                                                                        .show(ui, |ui| {
-                                                                            ui.label(&msg.content);
-                                                                        });
+                                                                        if i + 1 < len {
+                                                                            ui.add_space(4.0);
+                                                                        }
+                                                                    }
                                                                 });
-                                                                // Only add space if not the last message
-                                                                if i + 1 < len {
-                                                                    ui.add_space(4.0);
-                                                                }
-                                                            }
-                                                        });
-                                                    });
+                                                            });
+                                                    },
+                                                );
                                             });
                                     });
-                            });
+
+                                ui.add_space(6.0);
+                                ui.horizontal(|ui| {
+                                    let response = ui.add(
+                                        egui::TextEdit::singleline(&mut chat.input_text)
+                                            .hint_text("Type a message")
+                                            .desired_width((ui.available_width() - 60.0).max(140.0)),
+                                    );
+                                    let send_clicked = ui
+                                        .add(egui::Button::new("Send"))
+                                        .clicked()
+                                        || (response.lost_focus()
+                                            && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+
+                                    if send_clicked && !chat.input_text.trim().is_empty() {
+                                        let message_text = chat.input_text.trim().to_string();
+                                        chat.input_text.clear();
+
+                                        let user_message = ChatMessage {
+                                            content: message_text.clone(),
+                                            from: Some("Human".to_string()),
+                                            correlation: None,
+                                            source: MessageSource::Human,
+                                            api_auto_respond: false,
+                                            assistant_generation: None,
+                                        };
+                                        let ts = ChatExample::current_timestamp_string();
+                                        chat.messages.push(user_message.clone());
+                                        chat.message_timestamps.push(ts.clone());
+
+                                        if let Some(room_id) = &chat.selected_room {
+                                            let _ = store.append_message(room_id, &user_message, &ts);
+                                        }
+                                    }
+                                });
+                                },
+                            );
                         });
-                                                                                egui::Frame::new()
-                                                                                    .fill(ui.visuals().extreme_bg_color)
-                                                                                    .stroke(egui::Stroke::new(0.5, ui.visuals().widgets.noninteractive.bg_stroke.color))
-                                                                                    .corner_radius(egui::CornerRadius::same(6))
-                                                                                    .inner_margin(egui::Margin::symmetric(8, 4))
-                                                                                    .show(ui, |ui| {
-                                                                                        ui.label(msg);
-                                                                                    });
-                                                                            });
-                                                                            // Only add space if not the last message
-                                                                            if i + 1 < len {
-                                                                                ui.add_space(4.0);
-                                                                            }
-                                                                        }
-                                                                    });
-                                                                });
-                                                        });
-                                                });
-                                        });
-                                    },
-                                );
-                            });
+                        });
                         return;
                     }
                     if self.nodes_panel.active_tab == PanelTab::Ollama {

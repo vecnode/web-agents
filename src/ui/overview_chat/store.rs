@@ -92,11 +92,12 @@ impl Store {
             }
         }
         let conn = Connection::open(&path)?;
+        // Always run idempotent schema bootstrap so older DBs get missing columns.
+        schema::create_tables(&conn)?;
         let ver: i32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap_or(0);
         if ver < USER_VERSION {
-            schema::create_tables(&conn)?;
             conn.execute_batch(&format!("PRAGMA user_version = {USER_VERSION};"))?;
         }
         Ok(Self {
@@ -214,17 +215,19 @@ impl Store {
         let mut out = Vec::new();
         for row in rows {
             let (id, name, updated_at) = row?;
-            out.push((id, name, updated_at));
+            let _ = name;
+            out.push(ConversationSummary { id, updated_at });
         }
         Ok(out)
-        pub fn rename_conversation(&self, id: &str, new_name: &str) -> Result<(), StoreError> {
-            let conn = self.conn.lock().unwrap();
-            conn.execute(
-                "UPDATE conversations SET name = ?2, updated_at = ?3 WHERE id = ?1",
-                params![id, new_name, audit::now_rfc3339()],
-            )?;
-            Ok(())
-        }
+    }
+
+    pub fn rename_conversation(&self, id: &str, new_name: &str) -> Result<(), StoreError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE conversations SET name = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, new_name, audit::now_rfc3339()],
+        )?;
+        Ok(())
     }
 
     pub fn append_message(&self, conversation_id: &str, msg: &ChatMessage, display_ts: &str) -> Result<(), StoreError> {

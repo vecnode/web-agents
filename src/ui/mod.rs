@@ -8,6 +8,7 @@ use tokio::runtime::Handle;
 mod nodes_panel;
 mod python_panel;
 mod settings_panel;
+mod overview_chat;
 
 pub(crate) struct OllamaUiState {
 	pub(crate) models: Arc<Mutex<Vec<String>>>,
@@ -61,7 +62,9 @@ pub(crate) struct AMSAgentsUiState {
 	pub(crate) agents_workspace_path: String,
 	pub(crate) manifest_status_message: String,
 	pub(crate) python: PythonPanelUiState,
+	#[allow(dead_code)]
 	pub(crate) inbox_messages: Vec<(String, String)>, // (timestamp, message)
+	#[allow(dead_code)]
 	pub(crate) inbox_input: String,
 }
 
