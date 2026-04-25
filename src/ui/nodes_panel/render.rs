@@ -635,9 +635,6 @@ impl AMSAgents {
                     {
                         pending_events.push(last_msg);
                     }
-                    // HTTP POST for evaluator/researcher results (no separate output node type).
-                    let has_output_nodes = true;
-
                     // Queue new events for active Evaluator nodes.
                     for rec in &self.nodes_panel.agents {
                         let id = rec.id;
@@ -779,6 +776,7 @@ impl AMSAgents {
                                         .map(|r| r.experiment_id.clone()),
                                     run_id: run_context.as_ref().map(|r| r.run_id.clone()),
                                     node_global_id: Some(eval_global_id.clone()),
+                                    turn_index: None,
                                 },
                             )
                             .await
@@ -822,17 +820,15 @@ impl AMSAgents {
                                             }
                                         }
                                     };
-                                    if has_output_nodes
-                                        && let Err(e) =
-                                            crate::web::send_evaluator_result(
-                                                &endpoint,
-                                                "Agent Evaluator",
-                                                sentiment,
-                                                &response,
-                                                run_context.as_ref(),
-                                                ledger.as_ref(),
-                                            )
-                                            .await
+                                    if let Err(e) = crate::web::send_evaluator_result(
+                                        &endpoint,
+                                        "Agent Evaluator",
+                                        sentiment,
+                                        &response,
+                                        run_context.as_ref(),
+                                        ledger.as_ref(),
+                                    )
+                                    .await
                                     {
                                         eprintln!("[Evaluator] Failed to send to ams-chat: {e}");
                                     }
@@ -934,6 +930,7 @@ impl AMSAgents {
                                         .map(|r| r.experiment_id.clone()),
                                     run_id: run_context.as_ref().map(|r| r.run_id.clone()),
                                     node_global_id: Some(res_global_id.clone()),
+                                    turn_index: None,
                                 },
                             )
                             .await
@@ -949,17 +946,15 @@ impl AMSAgents {
                                             serde_json::json!({ "topic": topic }),
                                         );
                                     }
-                                    if has_output_nodes
-                                        && let Err(e) =
-                                            crate::web::send_researcher_result(
-                                                &endpoint,
-                                                "Agent Researcher",
-                                                &topic,
-                                                &response,
-                                                run_context.as_ref(),
-                                                ledger.as_ref(),
-                                            )
-                                            .await
+                                    if let Err(e) = crate::web::send_researcher_result(
+                                        &endpoint,
+                                        "Agent Researcher",
+                                        &topic,
+                                        &response,
+                                        run_context.as_ref(),
+                                        ledger.as_ref(),
+                                    )
+                                    .await
                                     {
                                         eprintln!("[Researcher] Failed to send to ams-chat: {e}");
                                     }

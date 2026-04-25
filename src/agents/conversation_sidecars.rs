@@ -268,6 +268,7 @@ pub async fn run_researchers_before_worker_turn(
                     experiment_id,
                     run_id,
                     node_global_id: Some(rs.global_id.clone()),
+                    turn_index: None,
                 },
             )
             .await;
@@ -411,6 +412,7 @@ pub async fn run_evaluator_sidecars_for_message(
                 experiment_id: experiment_id.clone(),
                 run_id: run_id.clone(),
                 node_global_id: Some(ev.global_id.clone()),
+                turn_index: None,
             },
         )
         .await

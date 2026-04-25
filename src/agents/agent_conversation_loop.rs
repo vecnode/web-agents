@@ -24,11 +24,30 @@ impl ConversationPerfConfig {
     fn load() -> Self {
         Self {
             // Keep timings stable and minimize overhead: fixed fast profile.
-            quiet_logs: true,
+            quiet_logs: false,
             async_http: true,
             compact_ledger: true,
         }
     }
+}
+
+fn parse_bool_env(name: &str, default: bool) -> bool {
+    match std::env::var(name) {
+        Ok(v) => match v.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => true,
+            "0" | "false" | "no" | "off" => false,
+            _ => default,
+        },
+        Err(_) => default,
+    }
+}
+
+fn chat_stream_enabled() -> bool {
+    parse_bool_env("AMS_CHAT_STREAM_ENABLED", true)
+}
+
+fn conversation_http_stream_enabled() -> bool {
+    parse_bool_env("AMS_CONVERSATION_HTTP_STREAM_ENABLED", false)
 }
 
 #[derive(Clone)]
@@ -73,6 +92,8 @@ pub async fn start_conversation_loop(
     }
 
     let perf = ConversationPerfConfig::load();
+    let enable_chat_stream = chat_stream_enabled();
+    let enable_http_stream = conversation_http_stream_enabled();
     let mut turn = 0;
     let mut current_speaker_idx = 0usize;
     let participant_ids = participants
@@ -129,7 +150,7 @@ pub async fn start_conversation_loop(
         );
     }
 
-    if perf.async_http {
+    if enable_http_stream && perf.async_http {
         let endpoint = endpoint.clone();
         let conversation_manager_name = conversation_manager_name.clone();
         let topics_summary = topics_summary.clone();
@@ -153,7 +174,8 @@ pub async fn start_conversation_loop(
                 eprintln!("[HTTP] Failed to send conversation start message: {}", e);
             }
         });
-    } else if let Err(e) = crate::web::send_conversation_message(
+    } else if enable_http_stream
+        && let Err(e) = crate::web::send_conversation_message(
         &endpoint,
         0,
         &conversation_manager_name,
@@ -169,7 +191,7 @@ pub async fn start_conversation_loop(
         eprintln!("[HTTP] Failed to send conversation start message: {}", e);
     }
 
-    if let (Some(tx), Some(room_id)) = (&chat_turn_tx, &chat_room_id) {
+    if enable_chat_stream && let (Some(tx), Some(room_id)) = (&chat_turn_tx, &chat_room_id) {
         let _ = tx.send(crate::agents::AgentChatEvent {
             from: conversation_manager_name.clone(),
             content: format!("{}: {}", conversation_manager_name, start_message),
@@ -302,6 +324,10 @@ pub async fn start_conversation_loop(
             sidecar_augmentation: &research_injection,
         });
 
+        let gap_us = turn_tracker.current_gap_us();
+        let gap_ms = turn_tracker.current_gap_ms();
+        turn_tracker.mark_turn_started();
+
         app_state.metrics_sink().record_turn(TurnTimingEvent {
             event_type: "turn_timing".to_string(),
             timestamp: now_rfc3339_utc(),
@@ -313,7 +339,8 @@ pub async fn start_conversation_loop(
             speaker_name: sender_name.clone(),
             receiver_id,
             receiver_name: receiver_name.clone(),
-            gap_ms: turn_tracker.current_gap_ms(),
+            gap_ms,
+            gap_us,
         });
 
         let turn_message = assembled_prompt.turn_directive.clone();
@@ -321,7 +348,7 @@ pub async fn start_conversation_loop(
             println!("{}", turn_message);
         }
 
-        if let (Some(tx), Some(room_id)) = (&chat_turn_tx, &chat_room_id) {
+        if enable_chat_stream && let (Some(tx), Some(room_id)) = (&chat_turn_tx, &chat_room_id) {
             let _ = tx.send(crate::agents::AgentChatEvent {
                 from: manager_name.clone(),
                 content: format!("{}: {}", manager_name, turn_message),
@@ -329,7 +356,7 @@ pub async fn start_conversation_loop(
             });
         }
 
-        if perf.async_http {
+        if enable_http_stream && perf.async_http {
             let endpoint_clone = endpoint.clone();
             let topic_clone = effective_topic.clone();
             let turn_message_clone = turn_message.clone();
@@ -377,6 +404,7 @@ pub async fn start_conversation_loop(
                 experiment_id: run_context.as_ref().map(|r| r.experiment_id.clone()),
                 run_id: run_context.as_ref().map(|r| r.run_id.clone()),
                 node_global_id: Some(sender_gid.clone()),
+                turn_index: Some(turn as u32),
             },
         )
         .await
@@ -415,7 +443,7 @@ pub async fn start_conversation_loop(
                 }
 
                 // Forward the completed turn to the overview chat room.
-                if let (Some(tx), Some(room_id)) = (&chat_turn_tx, &chat_room_id) {
+                if enable_chat_stream && let (Some(tx), Some(room_id)) = (&chat_turn_tx, &chat_room_id) {
                     let _ = tx.send(crate::agents::AgentChatEvent {
                         from: sender_name.clone(),
                         content: format!("{}: {}", sender_name, response),
@@ -432,7 +460,7 @@ pub async fn start_conversation_loop(
                     )
                 };
 
-                if perf.async_http {
+                if enable_http_stream && perf.async_http {
                     let endpoint = endpoint.clone();
                     let sender_name_http = sender_name.clone();
                     let receiver_name_http = receiver_name.clone();
@@ -457,7 +485,8 @@ pub async fn start_conversation_loop(
                             eprintln!("[HTTP] Failed to send message: {}", e);
                         }
                     });
-                } else if let Err(e) = crate::web::send_conversation_message(
+                } else if enable_http_stream
+                    && let Err(e) = crate::web::send_conversation_message(
                     &endpoint,
                     sender_id,
                     &sender_name,
@@ -495,7 +524,7 @@ pub async fn start_conversation_loop(
                     Vec::new()
                 };
 
-                if let (Some(tx), Some(room_id)) = (&chat_turn_tx, &chat_room_id) {
+                if enable_chat_stream && let (Some(tx), Some(room_id)) = (&chat_turn_tx, &chat_room_id) {
                     for ev_out in evaluator_outputs {
                         let _ = tx.send(crate::agents::AgentChatEvent {
                             from: "Agent Evaluator".to_string(),
@@ -561,7 +590,7 @@ pub async fn start_conversation_loop(
         );
     }
 
-    if perf.async_http {
+    if enable_http_stream && perf.async_http {
         let endpoint = endpoint.clone();
         let conversation_manager_name = conversation_manager_name.clone();
         let topics_summary = topics_summary.clone();
@@ -585,7 +614,8 @@ pub async fn start_conversation_loop(
                 eprintln!("[HTTP] Failed to send conversation end message: {}", e);
             }
         });
-    } else if let Err(e) = crate::web::send_conversation_message(
+    } else if enable_http_stream
+        && let Err(e) = crate::web::send_conversation_message(
         &endpoint,
         0,
         &conversation_manager_name,
@@ -601,7 +631,7 @@ pub async fn start_conversation_loop(
         eprintln!("[HTTP] Failed to send conversation end message: {}", e);
     }
 
-    if let (Some(tx), Some(room_id)) = (&chat_turn_tx, &chat_room_id) {
+    if enable_chat_stream && let (Some(tx), Some(room_id)) = (&chat_turn_tx, &chat_room_id) {
         let _ = tx.send(crate::agents::AgentChatEvent {
             from: conversation_manager_name.clone(),
             content: format!("{}: {}", conversation_manager_name, end_message),

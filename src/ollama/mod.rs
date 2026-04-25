@@ -33,6 +33,19 @@ fn format_rfc3339(ts: SystemTime) -> String {
     chrono::DateTime::<chrono::Utc>::from(ts).to_rfc3339()
 }
 
+fn duration_us(d: std::time::Duration) -> u128 {
+    d.as_micros()
+}
+
+fn duration_ms_ceil(d: std::time::Duration) -> u128 {
+    let us = d.as_micros();
+    if us == 0 {
+        0
+    } else {
+        us.div_ceil(1000)
+    }
+}
+
 pub async fn fetch_ollama_models(ollama_host: &str) -> Result<Vec<String>> {
     client::fetch_models(ollama_host).await
 }
@@ -96,11 +109,13 @@ pub async fn send_to_ollama_with_result(
                 t_end: format_rfc3339(t_end_wall),
                 duration_ms: t_start.elapsed().as_millis(),
                 ttft_ms: None,
+                ttft_us: None,
                 input_chars: input.chars().count(),
                 output_chars: 0,
                 prompt_token_count: None,
                 candidates_token_count: None,
                 total_token_count: None,
+                turn_index: trace_context.turn_index,
                 prompt: Some(input.to_string()),
             });
             return Err(anyhow::anyhow!(OLLAMA_STOPPED_MSG));
@@ -147,11 +162,13 @@ pub async fn send_to_ollama_with_result(
                 t_end: format_rfc3339(t_end_wall),
                 duration_ms: t_start.elapsed().as_millis(),
                 ttft_ms: None,
+                ttft_us: None,
                 input_chars: input.chars().count(),
                 output_chars: 0,
                 prompt_token_count: None,
                 candidates_token_count: None,
                 total_token_count: None,
+                turn_index: trace_context.turn_index,
                 prompt: Some(input.to_string()),
             });
             return Err(e);
@@ -163,7 +180,8 @@ pub async fn send_to_ollama_with_result(
         .ttft
         .and_then(|d| t_start_wall.checked_add(d))
         .map(format_rfc3339);
-    let ttft_ms = infer.ttft.map(|d| d.as_millis());
+    let ttft_us = infer.ttft.map(duration_us);
+    let ttft_ms = infer.ttft.map(duration_ms_ceil);
     let output_chars = infer.text.chars().count();
     metrics_sink.record_inference(InferenceTimingEvent {
         event_type: "inference_timing".to_string(),
@@ -180,11 +198,13 @@ pub async fn send_to_ollama_with_result(
         t_end: format_rfc3339(t_end_wall),
         duration_ms: t_start.elapsed().as_millis(),
         ttft_ms,
+        ttft_us,
         input_chars: input.chars().count(),
         output_chars,
         prompt_token_count: infer.usage.as_ref().map(|u| u.prompt_token_count),
         candidates_token_count: infer.usage.as_ref().map(|u| u.candidates_token_count),
         total_token_count: infer.usage.as_ref().map(|u| u.total_token_count),
+        turn_index: trace_context.turn_index,
         prompt: Some(input.to_string()),
     });
 
@@ -214,6 +234,7 @@ pub async fn test_ollama(
             experiment_id: None,
             run_id: None,
             node_global_id: None,
+            turn_index: None,
         },
     )
     .await?;

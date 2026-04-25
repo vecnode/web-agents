@@ -84,7 +84,7 @@ impl WebConfig {
 }
 
 pub fn outbound_webhooks_enabled() -> bool {
-    WebConfig::from_env().enabled
+    parse_bool_env("AMS_WEBHOOKS_ENABLED", false)
 }
 
 fn parse_bool_env(name: &str, default: bool) -> bool {

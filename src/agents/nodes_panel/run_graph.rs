@@ -53,6 +53,9 @@ impl AMSAgents {
     pub(crate) fn run_graph(&mut self) -> String {
         // Bulletproof behavior: re-run means stop existing graph processes first.
         self.stop_graph();
+        // Mark as running immediately so UI can switch Start -> Stop while setup occurs.
+        self.conversation_graph_running
+            .store(true, Ordering::Release);
         // Create a fresh agent→chat channel for this run.
         let (chat_tx, chat_rx) = std::sync::mpsc::channel::<crate::agents::AgentChatEvent>();
         self.chat_turn_tx = Some(chat_tx);
@@ -81,6 +84,8 @@ impl AMSAgents {
             match self.build_run_manifest(experiment_id_override, self.read_only_replay_mode) {
                 Ok(m) => m,
                 Err(e) => {
+                    self.conversation_graph_running
+                        .store(false, Ordering::Release);
                     eprintln!("[Run Graph] Manifest build failed: {e}");
                     return format!("Manifest build failed: {e}");
                 }
@@ -88,6 +93,8 @@ impl AMSAgents {
         let manifest_path = match self.persist_active_manifest(manifest) {
             Ok(p) => p,
             Err(e) => {
+                self.conversation_graph_running
+                    .store(false, Ordering::Release);
                 eprintln!("[Run Graph] Manifest save failed: {e}");
                 return format!("Manifest save failed: {e}");
             }
@@ -181,6 +188,8 @@ impl AMSAgents {
             .collect();
 
         if eligible.is_empty() {
+            self.conversation_graph_running
+                .store(false, Ordering::Release);
             if Self::should_log_play_plan() {
                 let play_plan = collect_run_play_plan_from_agents(&self.nodes_panel.agents, vec![]);
                 match serde_json::to_string_pretty(&play_plan) {
@@ -302,8 +311,6 @@ impl AMSAgents {
             }
         }
 
-        self.conversation_graph_running
-            .store(true, Ordering::Release);
         status_message
     }
 

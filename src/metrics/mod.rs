@@ -51,6 +51,7 @@ pub struct InferenceTraceContext {
     pub experiment_id: Option<String>,
     pub run_id: Option<String>,
     pub node_global_id: Option<String>,
+    pub turn_index: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -76,6 +77,8 @@ pub struct InferenceTimingEvent {
     pub duration_ms: u128,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ttft_ms: Option<u128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttft_us: Option<u128>,
     pub input_chars: usize,
     pub output_chars: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -84,6 +87,8 @@ pub struct InferenceTimingEvent {
     pub candidates_token_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_token_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_index: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
 }
@@ -104,6 +109,8 @@ pub struct TurnTimingEvent {
     pub receiver_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gap_ms: Option<u128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gap_us: Option<u128>,
 }
 
 pub trait MetricsSink: Send + Sync {
@@ -180,7 +187,7 @@ pub fn build_metrics_sink(config: &MetricsConfig) -> Arc<dyn MetricsSink> {
 
 pub struct TurnTracker {
     turn_index: usize,
-    last_turn_end: Option<Instant>,
+    last_turn_start: Option<Instant>,
 }
 
 impl Default for TurnTracker {
@@ -193,7 +200,7 @@ impl TurnTracker {
     pub fn new(first_turn_index: usize) -> Self {
         Self {
             turn_index: first_turn_index,
-            last_turn_end: None,
+            last_turn_start: None,
         }
     }
 
@@ -201,12 +208,19 @@ impl TurnTracker {
         self.turn_index
     }
 
+    pub fn current_gap_us(&self) -> Option<u128> {
+        self.last_turn_start.map(|t| t.elapsed().as_micros())
+    }
+
     pub fn current_gap_ms(&self) -> Option<u128> {
-        self.last_turn_end.map(|t| t.elapsed().as_millis())
+        self.current_gap_us().map(|us| if us == 0 { 0 } else { us.div_ceil(1000) })
+    }
+
+    pub fn mark_turn_started(&mut self) {
+        self.last_turn_start = Some(Instant::now());
     }
 
     pub fn mark_turn_completed(&mut self) {
-        self.last_turn_end = Some(Instant::now());
         self.turn_index += 1;
     }
 }
@@ -248,6 +262,7 @@ mod tests {
             t_end: "2026-01-01T00:00:01Z".to_string(),
             duration_ms: 1000,
             ttft_ms: Some(250),
+            ttft_us: Some(250_000),
             input_chars: 12,
             output_chars: 24,
             prompt_token_count: Some(10),
@@ -276,6 +291,7 @@ mod tests {
         assert_eq!(tracker.current_turn_index(), 3);
         assert_eq!(tracker.current_gap_ms(), None);
 
+        tracker.mark_turn_started();
         tracker.mark_turn_completed();
         assert_eq!(tracker.current_turn_index(), 4);
 

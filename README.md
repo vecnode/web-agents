@@ -30,6 +30,10 @@ AMS_WEB_ENABLED=true cargo run
 
 # Distribution: build the application ('target/release/')
 cargo build --release
+
+cargo run --bin timings_report -- metrics/timings.jsonl
+
+
 ```
 
 ### uv Tests
